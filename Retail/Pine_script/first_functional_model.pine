@@ -1,0 +1,29 @@
+//@version=6
+strategy("Retail Bot v6.7 - FIXED ADX", overlay=true)
+
+// ✅ Correct ADX Calculation
+[diplus, diminus, adx] = ta.dmi(14, 14)
+
+// Other Indicators
+emaFast = ta.ema(close, 9)
+emaSlow = ta.ema(close, 34)
+[macdLine, signalLine, _] = ta.macd(close, 12, 26, 9)
+vwap = ta.vwap(hlc3)
+atr = ta.atr(14)
+
+// ✅ Improved Trend Detection (Using Fixed ADX)
+validTrend = adx > 25  // Ensures strong market conditions
+
+// Entry Conditions
+bullishSignal = emaFast > emaSlow and macdLine > signalLine and close > vwap and validTrend
+bearishSignal = emaFast < emaSlow and macdLine < signalLine and close < vwap and validTrend
+
+// Trade Execution
+if bullishSignal
+    strategy.entry("Long", strategy.long)
+
+if bearishSignal
+    strategy.entry("Short", strategy.short)
+
+// ✅ Plot ADX for Debugging
+plot(adx, title="ADX", color=color.blue)

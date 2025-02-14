@@ -1,0 +1,22 @@
+//@version=6
+strategy("RetailBot Pro", overlay=true, margin_long=100, margin_short=100)
+
+// Institutional Confirmation
+vwap = ta.vwap(close)
+volume_avg = ta.sma(volume, 20)
+valid_trend = ta.ema(close, 50) > ta.ema(close, 200)
+
+// Entry Logic
+long_signal = close > vwap and volume > volume_avg and valid_trend
+short_signal = close < vwap and volume > volume_avg and valid_trend
+
+// Risk-Managed Execution
+position_size = strategy.equity * 0.01 / ta.atr(14)
+
+if long_signal
+    strategy.entry("Long", strategy.long, qty=position_size)
+    strategy.exit("Exit", "Long", stop=close - 2*ta.atr(14), limit=close + 3*ta.atr(14))
+
+if short_signal
+    strategy.entry("Short", strategy.short, qty=position_size)
+    strategy.exit("Exit", "Short", stop=close + 2*ta.atr(14), limit=close - 3*ta.atr(14))
