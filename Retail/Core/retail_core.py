@@ -6,6 +6,8 @@ import logging
 import threading
 import asyncio
 import sqlite3
+import yaml
+from contextlib import contextmanager
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List
 
@@ -30,13 +32,21 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ✅ Database Storage
 # --------------------------
 class TradeStorage:
-    def __init__(self):
-        self.conn = sqlite3.connect(Config.DATABASE_PATH)
+    def __init__(self, db_path):
+        self.db_path = db_path
         self.create_table()
 
+    @contextmanager
+    def connect(self):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def create_table(self):
-        with self.conn:
-            self.conn.execute("""
+        with self.connect() as conn:
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS trades (
                     id INTEGER PRIMARY KEY,
                     trade_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -47,13 +57,14 @@ class TradeStorage:
                 )
             """)
 
-    def store_trade(self, trade_details: Dict[str, Any]):
-        with self.conn:
-            self.conn.execute("""
-                INSERT INTO trades (trade_type, price, volume, strategy) VALUES (?, ?, ?, ?)
-            """, (trade_details['trade_type'], trade_details['price'], trade_details['volume'], trade_details['strategy']))
-            logging.info(f"Stored trade: {trade_details}")
-
+    def store_trade(self, trade_details):
+        with self.connect() as conn:
+            conn.execute("""
+                INSERT INTO trades (trade_type, price, volume, strategy)
+                VALUES (?, ?, ?, ?)
+            """, (trade_details['trade_type'], trade_details['price'],
+                  trade_details['volume'], trade_details['strategy']))
+            conn.commit()
 # --------------------------
 # ✅ Abstract Base Classes
 # --------------------------
@@ -206,3 +217,13 @@ class RetailBotCore:
         # Main loop for running the bot
         pass
 
+# Modular Configuration Management
+
+class Config:
+    def __init__(self, config_file='config.yaml'):
+        with open(config_file, 'r') as file:
+            config = yaml.safe_load(file)
+            self.data_feed_interval = config['data_feed_interval']
+            self.risk_threshold = config['risk_threshold']
+            self.broker_api_keys = config['broker_api_keys']
+            self.database_path = config['database_path']
