@@ -7,15 +7,17 @@ from keras.layers import Dense
 class RiskManagement:
     """Handles risk evaluation and position sizing."""
     
-    def __init__(self, max_drawdown=0.2, capital_exposure_limit=0.1):
-        self.max_drawdown = max_drawdown
-        self.capital_exposure_limit = capital_exposure_limit
+    def __init__(self, data_feed, portfolio_state, strategy_stats, config):
+        self.data_feed = data_feed
+        self.portfolio_state = portfolio_state
+        self.strategy_stats = strategy_stats
+        self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def evaluate_risk(self, trade_details: Dict[str, Any]) -> bool:
         """Rejects trades exceeding risk threshold."""
         risk = trade_details.get("risk", 0)
-        if risk > self.capital_exposure_limit:
+        if risk > self.config.risk.max_drawdown:
             self.logger.warning(f"Trade rejected due to high risk: {trade_details}")
             return False
         return True
@@ -23,33 +25,32 @@ class RiskManagement:
     def adjust_position_size(self, trade_details: Dict[str, Any]) -> Dict[str, Any]:
         """Adjusts position size dynamically based on risk."""
         risk = trade_details.get("risk", 0.01)
-        trade_details["position_size"] = min(1.0, self.capital_exposure_limit / risk)
+        trade_details["position_size"] = min(1.0, self.config.risk.capital_exposure_limit / risk)
         return trade_details
-    
-    def __init__(self):
-        self.risk_to_reward_ratio = 2  # Enforce 1:2 risk-reward ratio
-        self.max_slippage = 0.5  # Maximum acceptable slippage in %
 
-    def evaluate_trade(self, entry_price, stop_loss, take_profit, slippage):
-        """Evaluate trade based on risk-reward ratio & slippage constraints."""
-        risk = abs(entry_price - stop_loss)
-        reward = abs(take_profit - entry_price)
-
-        if reward / risk < self.risk_to_reward_ratio:
-            return "REJECTED: Poor Risk-Reward Ratio"
-        if slippage > self.max_slippage:
-            return "REJECTED: Excessive Slippage"
-
-        return "TRADE APPROVED"
+    def calculate_position_size(self, symbol, strategy_type):
+        """
+        Dynamically determines position size using volatility and Kelly Criterion.
+        """
+        volatility = self.data_feed.get_historical_volatility(symbol)
+        account_equity = self.portfolio_state.equity
+        risk_capital = account_equity * self.config.risk.max_drawdown
+        
+        win_rate = self.strategy_stats[strategy_type]['win_rate']
+        avg_win_loss_ratio = self.strategy_stats[strategy_type]['pnl_ratio']
+        kelly_fraction = win_rate - ((1 - win_rate) / avg_win_loss_ratio)
+        
+        position_size = (risk_capital * kelly_fraction) / volatility
+        return round(position_size, 2)
 
 class AdaptiveRiskManagement:
     """Dynamically adjusts risk based on market volatility & liquidity."""
 
-    def __init__(self, max_drawdown=0.2, capital_exposure_limit=0.1):
-        self.max_drawdown = max_drawdown  # Default drawdown limit
-        self.capital_exposure_limit = capital_exposure_limit  # % of capital to risk per trade
-        self.volatility_threshold = 0.03  # Default volatility threshold (3%)
-        self.liquidity_threshold = 5000  # Minimum liquidity needed for safe trade execution
+    def __init__(self, data_feed, portfolio_state, strategy_stats, config):
+        self.data_feed = data_feed
+        self.portfolio_state = portfolio_state
+        self.strategy_stats = strategy_stats
+        self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def adjust_risk_parameters(self, market_data: Dict[str, Any]):
@@ -60,13 +61,13 @@ class AdaptiveRiskManagement:
         liquidity = market_data.get("order_book_liquidity", 0)  # Fetch liquidity data
         
         # If volatility is high, reduce drawdown & risk exposure
-        if volatility > self.volatility_threshold:
-            self.max_drawdown = 0.1  # Reduce drawdown limit
-            self.capital_exposure_limit = 0.05  # Lower position size
-            self.logger.warning(f"High Volatility Detected: Reducing Risk Exposure (Max Drawdown: {self.max_drawdown}, Position Size: {self.capital_exposure_limit})")
+        if volatility > self.config.risk.volatility_threshold:
+            self.config.risk.max_drawdown = 0.1  # Reduce drawdown limit
+            self.config.risk.capital_exposure_limit = 0.05  # Lower position size
+            self.logger.warning(f"High Volatility Detected: Reducing Risk Exposure (Max Drawdown: {self.config.risk.max_drawdown}, Position Size: {self.config.risk.capital_exposure_limit})")
 
         # If liquidity is low, avoid trading
-        if liquidity < self.liquidity_threshold:
+        if liquidity < 5000:  # Assuming a fixed liquidity threshold
             self.logger.warning("⚠ Low Liquidity: Avoiding trade due to high slippage risk.")
             return False
 
@@ -86,10 +87,30 @@ class AdaptiveRiskManagement:
         if reward / risk < 2:  # Maintain at least 1:2 risk-reward ratio
             return "REJECTED: Poor Risk-Reward Ratio"
 
-        if slippage > self.max_drawdown:
+        if slippage > self.config.risk.max_drawdown:
             return "REJECTED: Excessive Slippage"
 
         return "TRADE APPROVED"
+
+class AdaptiveRiskManager:
+    """AI-driven risk management with dynamic stop-loss adjustment."""
+
+    def __init__(self, max_drawdown=0.02):
+        self.max_drawdown = max_drawdown
+
+    def dynamic_stop_loss(self, market_volatility):
+        """
+        Adjusts stop-loss dynamically based on volatility.
+        """
+        return max(0.005, min(self.max_drawdown * (1 + market_volatility / 100), 0.05))
+
+    def evaluate_risk(self, trade_details: Dict[str, Any], market_volatility: float) -> bool:
+        """
+        AI-driven risk evaluation before executing trade.
+        """
+        stop_loss = self.dynamic_stop_loss(market_volatility)
+        trade_risk = trade_details.get("risk", 0)
+        return trade_risk <= stop_loss
 
 class ReinforcementRiskManagement:
     """

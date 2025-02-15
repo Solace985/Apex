@@ -1,0 +1,14 @@
+risk:
+  max_drawdown: 5.0
+  daily_loss_limit: 2.0
+  volatility_threshold: 35.0
+
+execution:
+  slippage_tolerance: 0.001
+  latency_budget_ms: 50
+  retry_attempts: 3
+
+strategies:
+  enabled:
+    - TrendFollowing
+    - MeanReversion

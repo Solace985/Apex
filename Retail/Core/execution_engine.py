@@ -6,6 +6,8 @@ from requests.exceptions import RequestException, Timeout, HTTPError
 import asyncio
 import random
 import time
+import websockets
+import json
 
 # This file routes the trades to brokers and executes them.
 
@@ -23,15 +25,36 @@ class ExecutionEngine:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(RequestException)
+    )
+    async def execute_order(self, order):
+        """
+        Tries order execution with retries on failures.
+        """
+        try:
+            response = await self.broker_api.place_order(order)
+            self.logger.info(f"Order {order['id']} executed successfully")
+            return response
+        except (RequestException, TimeoutError) as e:
+            self.logger.error(f"Order {order['id']} failed: {str(e)}")
+            raise
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
         retry=retry_if_exception_type((RequestException, Timeout, HTTPError))
     )
     async def execute_order(self, order):
+        """
+        Tries order execution with retries on failures.
+        """
         try:
             self.validate_order(order)
             start_time = time.time()
             response = await self.broker_api.place_order(order)
             execution_time = time.time() - start_time
             await self.log_execution(order['id'], response, execution_time)
+            self.logger.info(f"Order {order['id']} executed successfully")
             return response
         except (RequestException, Timeout, HTTPError) as e:
             self.logger.error(f"Order {order['id']} failed: {str(e)}")
@@ -141,3 +164,22 @@ class HFTExecutionEngine:
         """
         self.fpga_engine.send_order(order_details)
         return True
+
+class WebSocketExecutionEngine:
+    def __init__(self, broker_api):
+        self.broker_api = broker_api
+        self.websocket_url = "wss://your-broker-websocket-endpoint"
+        self.websocket = None
+
+    async def connect(self):
+        self.websocket = await websockets.connect(self.websocket_url)
+        print("Connected to broker WebSocket.")
+
+    async def send_order(self, order_details):
+        order_payload = json.dumps(order_details)
+        await self.websocket.send(order_payload)
+        response = await self.websocket.recv()
+        print("Order Response:", response)
+
+    async def close_connection(self):
+        await self.websocket.close()
