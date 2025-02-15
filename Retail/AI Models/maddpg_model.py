@@ -170,3 +170,9 @@ class MADDPG:
             self.soft_update(self.target_actors[i], self.actors[i], self.tau)
             self.soft_update(self.target_critics[i], self.critics[i], self.tau)
 
+    def select_action(self, technical_features):
+        """Uses trained MADDPG model to decide whether to trade."""
+        state_tensor = torch.FloatTensor(technical_features).unsqueeze(0)
+        action = self.actor(state_tensor).detach().numpy()[0]
+        return action  # Output is a value between 0 and 1; trade if above threshold.
+

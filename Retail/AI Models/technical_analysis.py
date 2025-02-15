@@ -2,8 +2,10 @@ import talib
 import numpy as np
 
 class TechnicalAnalysis:
+    """Handles technical indicator calculations."""
+
     def __init__(self):
-        pass
+        self.previous_trades = []
 
     def compute_indicators(self, prices, volumes):
         """Calculates MACD, RSI, VWAP, and ADX."""
@@ -17,10 +19,24 @@ class TechnicalAnalysis:
             "rsi": rsi[-1],
             "adx": adx[-1]
         }
-    
-    # for considering technical analysis. also prevents false trades by considering historical performance.
-    def __init__(self):
-        self.previous_trades = []
+
+    def extract_technical_features(self, market_data):
+        """Prepares technical indicators as a feature vector for MADDPG."""
+        
+        ema_fast = market_data.get("ema_fast", 0)
+        ema_slow = market_data.get("ema_slow", 0)
+        macd_signal = market_data.get("macd_signal", 0)
+        rsi = market_data.get("rsi", 0)
+        adx = market_data.get("adx", 0)
+        vwap = market_data.get("vwap", 0)
+        obv = market_data.get("obv", 0)
+
+        # Convert indicators into a structured state representation for MADDPG
+        state_representation = np.array([
+            ema_fast, ema_slow, macd_signal, rsi, adx, vwap, obv
+        ])
+
+        return state_representation
 
     def calculate_weighted_signal(self, indicators):
         """Use historical performance to assign weights to technical indicators."""

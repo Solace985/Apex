@@ -10,10 +10,14 @@ import time
 # This file routes the trades to brokers and executes them.
 
 class ExecutionEngine:
-    """Handles trade execution logic."""
+    """
+    Handles trade execution, incorporating real-time risk evaluation
+    to prevent execution during unfavorable conditions.
+    """
 
-    def __init__(self, broker_api, logger=None):
+    def __init__(self, broker_api, risk_manager, logger=None):
         self.broker_api = broker_api
+        self.risk_manager = risk_manager  # ✅ Integrated risk manager
         self.logger = logger or logging.getLogger(__name__)
 
     @retry(
@@ -35,6 +39,31 @@ class ExecutionEngine:
         except ValueError as ve:
             self.logger.error(f"Order {order['id']} validation error: {str(ve)}")
             raise
+
+    async def execute_order(self, order_details):
+        """
+        Places a trade only if real-time risk assessment is favorable.
+        """
+        # ✅ Step 1: Check risk before execution
+        risk_decision = self.risk_manager.evaluate_trade(
+            entry_price=order_details["price"],
+            stop_loss=order_details["price"] * 0.98,
+            take_profit=order_details["price"] * 1.04,
+            slippage=order_details.get("slippage", 0),
+            market_data=order_details
+        )
+
+        if "REJECTED" in risk_decision:
+            self.logger.warning(f"Trade aborted due to dynamic risk evaluation: {risk_decision}")
+            return False
+
+        # ✅ Step 2: Place order with real-time monitoring
+        try:
+            response = await self.broker_api.place_order(order_details)
+            return response
+        except Exception as e:
+            self.logger.error(f"Trade execution failed: {e}")
+            return None
 
     async def execute_orders_concurrently(self, orders):
         """Execute multiple orders concurrently."""
@@ -78,7 +107,7 @@ class ExecutionEngine:
         self.broker_api.place_order(order_details)
         return f"Executed trade after {round(delay, 2)} seconds"
     
-    # Advanced oder execution:
+    # Advanced order execution:
     def execute_trade(self, order_details, order_type="market"):
         if order_type == "market":
             self.broker_api.place_market_order(order_details)
@@ -97,3 +126,18 @@ class SmartOrderRouter:
         """Selects the broker with lowest slippage & fees."""
         best_broker = min(self.broker_list, key=lambda broker: broker.get_execution_cost(trade_details))
         return best_broker
+
+class HFTExecutionEngine:
+    """
+    Uses FPGA-based execution for ultra-low latency order placement.
+    """
+
+    def __init__(self):
+        self.fpga_engine = connect_to_fpga()
+
+    def execute_order(self, order_details):
+        """
+        Places trades at sub-millisecond speeds using direct market access.
+        """
+        self.fpga_engine.send_order(order_details)
+        return True

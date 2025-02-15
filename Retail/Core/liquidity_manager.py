@@ -42,6 +42,22 @@ class LiquidityManager:
 
         return whale_bid or whale_ask
 
+class OrderBookProcessor:
+    """Processes real-time order book data to track large institutional movements."""
+    
+    def __init__(self, exchange_api):
+        self.exchange_api = exchange_api
+        self.order_book = {}
+
+    async def fetch_order_book(self, symbol):
+        self.order_book = await self.exchange_api.get_order_book(symbol)
+        return self.order_book
+
+    def detect_whale_activity(self):
+        """Detects unusual large orders that indicate institutional trading."""
+        large_orders = [order for order in self.order_book['bids'] if order['size'] > 1000]  # Adjust threshold
+        return len(large_orders) > 5  # If more than 5 large orders, assume institutional activity
+
 # ✅ Example Usage
 liquidity_manager = LiquidityManager()
 if liquidity_manager.detect_whale_activity("binance", "BTCUSDT"):

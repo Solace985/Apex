@@ -38,6 +38,7 @@ from ai_models.sentiment_analysis import SentimentAnalyzer
 from ai_models.liquidity_manager import LiquidityManager
 from ai_models.technical_analysis import TechnicalAnalysis
 from ai_models.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
+from Retail.Utils.risk_management import AdaptiveRiskManagement
 
 
 # This file is the core of the bot that is responsible for handling the strategy and execution of the trades.
@@ -276,14 +277,15 @@ class Logger:
 class RetailBotCore:
     """Main trading bot logic integrating all AI models, including MADDPG."""
 
-    def __init__(self, execution_engine, risk_manager, state_dim=10, action_dim=1):
+    def __init__(self, execution_engine, risk_manager):
         self.execution_engine = execution_engine
         self.risk_manager = risk_manager
         self.fundamental_analysis = FundamentalAnalysis()
         self.sentiment_analyzer = SentimentAnalyzer()
         self.liquidity_manager = LiquidityManager()
         self.technical_analysis = TechnicalAnalysis()
-        self.maddpg = MADDPG(state_dim, action_dim)  # ✅ Initialize MADDPG with state & action dimensions
+        self.maddpg = MADDPG(state_dim=10, action_dim=1)
+        self.machine_learning_model = MachineLearningModel()  # ✅ Add ML Model
 
     def should_trade(self, market_data):
         """Determines if a trade should be executed based on all AI layers, including MADDPG."""
@@ -309,22 +311,47 @@ class RetailBotCore:
             print("MADDPG does not confirm trade. Avoiding trade.")
             return False
 
+        # ✅ Step 4: Market Depth Analysis
+        if not self.analyze_market_depth(market_data):
+            return False
+
         print("Trade validated by all layers, including MADDPG. Executing trade.")
         return True
 
     def execute_trade(self, market_data):
-        """Executes trade if all layers confirm, including MADDPG reinforcement learning."""
-        if self.should_trade(market_data):
-            trade_details = {
-                "price": market_data["price"],
-                "volume": market_data["volume"],
-                "strategy": "AI-Layered Decision with MADDPG"
-            }
-            if self.risk_manager.evaluate_risk(trade_details):
-                self.execution_engine.execute_trade(trade_details)
-                print("Trade executed successfully.")
-            else:
-                print("Trade rejected due to risk constraints.")
+        """Executes trade if all AI layers confirm, using adaptive risk management & parallel order execution."""
+
+        if not self.analyze_market_depth(market_data):
+            return  # Skip trade if poor liquidity
+
+        selected_strategy = self.choose_best_strategy([market_data])  # Use batch processing
+        if not selected_strategy:
+            self.logger.warning("🚫 Trade skipped due to lack of a valid strategy.")
+            return
+
+        trade_details = {
+            "price": market_data["price"],
+            "volume": market_data["volume"],
+            "strategy": selected_strategy[0].name  # Extract strategy from batch result
+        }
+
+        risk_decision = self.risk_manager.evaluate_trade(
+            entry_price=trade_details["price"],
+            stop_loss=trade_details["price"] * 0.98,
+            take_profit=trade_details["price"] * 1.04,
+            slippage=market_data.get("slippage", 0),
+            market_data=market_data
+        )
+
+        if "REJECTED" in risk_decision:
+            self.logger.warning(risk_decision)
+            return
+
+        # ✅ Execute multiple orders in parallel to reduce latency
+        Parallel(n_jobs=2)([
+            delayed(self.execution_engine.execute_trade)(trade_details),
+            delayed(self.feedback_loop)(trade_details)
+        ])
 
     def choose_strategy(self, market_data):
         """Use ML model to select the best trading strategy dynamically."""
@@ -336,18 +363,69 @@ class RetailBotCore:
             self.logger.warning("Low confidence in prediction, using default strategy.")
             return self.strategy_manager.default_strategy()
 
+    def choose_best_strategy(self, market_data_batch):
+        """
+        Selects the best strategy dynamically for multiple trade opportunities at once.
+        Uses AI models (MADDPG, PPO, RandomForest) for decision-making.
+        """
+
+        # ✅ Step 1: Batch Process Fundamental & Sentiment Analysis
+        fundamental_scores = [self.fundamental_analysis.analyze_fundamentals(market) for market in market_data_batch]
+        sentiment_scores = [self.sentiment_analyzer.get_sentiment_score(market) for market in market_data_batch]
+        technical_signals = [self.technical_analysis.extract_technical_features(market) for market in market_data_batch]
+
+        # ✅ Step 2: Filter High-Risk Trades Before AI Processing
+        valid_trades = []
+        for idx, market_data in enumerate(market_data_batch):
+            if not self.risk_manager.evaluate_trade(
+                entry_price=market_data["price"],
+                stop_loss=market_data["price"] * 0.98,
+                take_profit=market_data["price"] * 1.04,
+                slippage=market_data.get("slippage", 0),
+                market_data=market_data
+            ):
+                continue  # Skip trade if high risk
+            valid_trades.append(market_data)
+
+        if not valid_trades:
+            self.logger.warning("🚫 No valid trades due to high risk constraints.")
+            return None
+
+        # ✅ Step 3: AI-Based Strategy Prediction for All Valid Trades
+        strategy_predictions, confidences = self.machine_learning_model.predict_batch(valid_trades)
+
+        selected_strategies = []
+        for i, market_data in enumerate(valid_trades):
+            if confidences[i] > 0.7:
+                selected_strategies.append(self.strategy_manager.strategies[strategy_predictions[i]])
+            else:
+                self.logger.warning(f"⚠ Low confidence in strategy selection for {market_data['symbol']}. Using default strategy.")
+                selected_strategies.append(self.strategy_manager.default_strategy())
+
+        return selected_strategies
+
     def start_trading(self):
-        """Main trading loop with dynamic strategy selection."""
+        """Main trading loop with adaptive strategy selection."""
         while True:
             market_data = self.data_feed.get_market_data()
-            selected_strategy = self.choose_strategy(market_data)
-            trade_signal = selected_strategy.generate_signal(market_data)
 
-            if trade_signal:
-                Parallel(n_jobs=2)([
-                    delayed(self.execution_engine.execute_trade)(trade_signal),
-                    delayed(self.feedback_loop)(trade_signal)
-                ])
+            # ✅ Step 1: Adaptive Strategy Selection
+            selected_strategy = self.choose_best_strategy(market_data)
+            if not selected_strategy:
+                self.logger.warning("❌ No suitable strategy found. Skipping trade.")
+                continue  # Skip trade if no strategy is selected
+
+            # ✅ Step 2: Generate Trade Signal
+            trade_signal = selected_strategy.generate_signal(market_data)
+            if not trade_signal:
+                self.logger.info("No trade signal generated. Waiting for next opportunity.")
+                continue  # Skip trade if no valid signal is generated
+
+            # ✅ Step 3: Execute Trade
+            Parallel(n_jobs=2)([
+                delayed(self.execution_engine.execute_trade)(trade_signal),
+                delayed(self.feedback_loop)(trade_signal)
+            ])
 
     def initialize_broker_api(self):
         # Placeholder for initializing broker API
@@ -387,6 +465,45 @@ class RetailBotCore:
         """Real-time monitoring and alerting."""
         # Implement monitoring logic
         pass
+
+    def analyze_market_depth(self, market_data):
+        """
+        Detects institutional order flow manipulation, iceberg orders, and spoofing attacks.
+        """
+        order_book = self.data_feed.get_order_book(market_data["symbol"])
+        
+        bid_ask_spread = order_book["ask_price"] - order_book["bid_price"]
+        order_book_depth = sum(order_book["bid_volume"]) - sum(order_book["ask_volume"])
+
+        if self.detect_spoofing(order_book):
+            self.logger.warning(f"🚨 Spoofing detected in {market_data['symbol']}. Skipping trade.")
+            return False
+
+        if self.detect_dark_pool_activity(market_data):
+            self.logger.warning(f"🚨 Dark Pool activity detected in {market_data['symbol']}. Skipping trade.")
+            return False
+
+        if bid_ask_spread > 0.02 * market_data["price"]:  
+            self.logger.warning(f"🚫 High bid-ask spread detected for {market_data['symbol']}. Skipping trade.")
+            return False
+
+        return True
+
+    def detect_spoofing(self, order_book):
+        """
+        Identifies spoofing by detecting large orders that disappear quickly.
+        """
+        recent_orders = self.data_feed.get_recent_orders(order_book["symbol"])
+        suspicious_orders = [o for o in recent_orders if o["size"] > 1000 and o["duration"] < 0.5]
+
+        return len(suspicious_orders) > 5  # If multiple spoof orders are detected, return True
+
+    def detect_iceberg_orders(self, order_book):
+        """
+        Detects iceberg orders by tracking hidden order execution patterns.
+        """
+        iceberg_levels = [level for level in order_book["bid_levels"] if level["volume"] > 5000]
+        return iceberg_levels[0]["price"] if iceberg_levels else None
 
     # to call liquidity manager and track whale movements before making trades
     def __init__(self, config):
@@ -583,3 +700,98 @@ if fundamental_score < -0.3:
     print("⚠ Avoid trading due to negative macro conditions.")
 elif fundamental_score > 0.3:
     print("✅ Favorable trading conditions detected.")
+
+class RetailBotCore:
+    """Main trading bot logic integrating all AI models & risk management."""
+
+    def __init__(self, execution_engine):
+        self.execution_engine = execution_engine
+        self.risk_manager = AdaptiveRiskManagement()  # ✅ Replacing static risk management with adaptive risk control
+        self.fundamental_analysis = FundamentalAnalysis()
+        self.sentiment_analyzer = SentimentAnalyzer()
+        self.liquidity_manager = LiquidityManager()
+        self.technical_analysis = TechnicalAnalysis()
+        self.maddpg = MADDPG(state_dim=10, action_dim=1)
+
+    class MarketImpactModel:
+        """
+        Predicts the impact of bot's own orders before executing trades.
+        """
+
+        def predict_impact(self, trade_size, market_data):
+            order_book = self.data_feed.get_order_book(market_data["symbol"])
+            liquidity = sum(order_book["bid_volume"]) + sum(order_book["ask_volume"])
+
+            expected_slippage = trade_size / liquidity * 100  # Estimate slippage in %
+
+            return expected_slippage
+
+    def execute_trade(self, market_data):
+        """Executes trade if all AI layers confirm, using adaptive risk management and market impact prediction."""
+
+        trade_size = market_data["volume"]
+        slippage_prediction = self.market_impact_model.predict_impact(trade_size, market_data)
+
+        if slippage_prediction > 0.5:  # If predicted slippage > 0.5%, avoid trade
+            self.logger.warning(f"⚠ High expected slippage ({slippage_prediction:.2f}%). Skipping trade.")
+            return
+
+        if self.should_trade(market_data):
+            trade_details = {
+                "price": market_data["price"],
+                "volume": market_data["volume"],
+                "strategy": "AI-Layered Decision with Adaptive Risk Control"
+            }
+
+            risk_decision = self.risk_manager.evaluate_trade(
+                entry_price=trade_details["price"],
+                stop_loss=trade_details["price"] * 0.98,  # Auto-set stop loss at 2% below entry
+                take_profit=trade_details["price"] * 1.04,  # Auto-set take profit at 4% above entry
+                slippage=market_data.get("slippage", 0),
+                market_data=market_data
+            )
+
+            if "REJECTED" in risk_decision:
+                print(risk_decision)  # Log reason for rejection
+                return
+
+            self.execution_engine.execute_trade(trade_details)
+            print("✅ Trade Executed with Minimal Market Impact and Dynamic Risk Adjustments")
+
+class MetaAICoordinator:
+    """
+    Combines outputs from MADDPG, ML Model, and Technical Analysis 
+    to ensure optimal trade decision-making.
+    """
+
+    def __init__(self):
+        self.maddpg = MADDPG(state_dim=10, action_dim=1)
+        self.machine_learning_model = MachineLearningModel()
+        self.technical_analysis = TechnicalAnalysis()
+
+    def decide_trade(self, market_data):
+        """
+        Uses a weighted ensemble model to determine final trade decision.
+        """
+
+        # Get predictions from all models
+        maddpg_decision = self.maddpg.select_action(
+            self.technical_analysis.extract_technical_features(market_data)
+        )
+        ml_prediction, ml_confidence = self.machine_learning_model.predict(market_data)
+
+        # **Ensemble Weighting Logic**
+        final_decision = (
+            (maddpg_decision * 0.5) + 
+            (ml_prediction * 0.3) + 
+            (self.technical_analysis.validate_trade(market_data) * 0.2)
+        )
+
+        return final_decision > 0.6  # ✅ Only trade if confidence is 60%+
+
+    def evaluate_trade_risk(self, market_data):
+        """
+        Evaluates the risk of a trade using additional AI models.
+        """
+        risk_score = self.machine_learning_model.evaluate_risk(market_data)
+        return risk_score < 0.7  # Proceed only if risk is below 70%
