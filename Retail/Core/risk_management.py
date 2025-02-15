@@ -161,3 +161,25 @@ class ReinforcementRiskManagement:
             return "REJECTED: High risk environment"
         
         return "TRADE APPROVED"
+
+import numpy as np
+
+class RiskManager:
+    def __init__(self, max_drawdown=0.02):
+        self.max_drawdown = max_drawdown
+
+    def calculate_position_size(self, symbol, strategy_type, portfolio_state, strategy_stats, data_feed):
+        """
+        Dynamically determines position size using volatility and Kelly Criterion.
+        """
+        volatility = data_feed.get_historical_volatility(symbol)
+        account_equity = portfolio_state.equity
+        risk_capital = account_equity * self.max_drawdown
+        
+        # Kelly Criterion-based position sizing
+        win_rate = strategy_stats[strategy_type]['win_rate']
+        avg_win_loss_ratio = strategy_stats[strategy_type]['pnl_ratio']
+        kelly_fraction = win_rate - ((1 - win_rate) / avg_win_loss_ratio)
+        
+        position_size = (risk_capital * kelly_fraction) / volatility
+        return round(position_size, 2)

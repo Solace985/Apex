@@ -12,3 +12,7 @@ strategies:
   enabled:
     - TrendFollowing
     - MeanReversion
+
+live_trading: false  # Ensure live trading is disabled
+testnet: true        # Enable paper trading mode
+use_backtest: true   # Enables backtesting mode

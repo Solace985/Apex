@@ -14,6 +14,9 @@ class StructuredLogger:
         self.logger.addHandler(handler)
 
     def log_order(self, order):
+        """
+        Logs order execution details in a structured format.
+        """
         self.logger.info(
             "Order executed",
             extra={

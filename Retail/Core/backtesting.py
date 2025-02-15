@@ -1,7 +1,7 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-class Backtester:
+class BacktestingEngine:
     def __init__(self, strategy, historical_data):
         self.strategy = strategy
         self.data = historical_data
@@ -13,13 +13,20 @@ class Backtester:
                 print(f"Trade Signal at {row['timestamp']}: {signal}")
 
     def add_slippage(self, order):
+        """
+        Simulates real-world bid-ask spread slippage.
+        """
         bid_ask_spread = self.data[order.symbol]['ask'] - self.data[order.symbol]['bid']
-        slippage = bid_ask_spread * 0.1 if order.side == 'BUY' else bid_ask_spread * 0.15
+        slippage = bid_ask_spread * (0.1 if order.side == 'BUY' else 0.15)
+        order.execution_price += slippage
         return slippage
 
     def add_latency(self, order):
-        latency = np.random.exponential(scale=0.05)  # 50ms avg latency
-        return order.timestamp + pd.Timedelta(latency, 'ms')
-
+        """
+        Adds execution latency simulation.
+        """
+        latency = np.random.exponential(scale=0.05)  # 50ms average latency
+        order.execution_time += pd.Timedelta(latency, 'ms')
+        return latency
 
 # allows users to simulate trades without using real money.
