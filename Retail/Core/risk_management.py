@@ -22,3 +22,25 @@ class RiskManagement:
         risk = trade_details.get("risk", 0.01)
         trade_details["position_size"] = min(1.0, self.capital_exposure_limit / risk)
         return trade_details
+    
+    def __init__(self):
+        self.risk_to_reward_ratio = 2  # Enforce 1:2 risk-reward ratio
+        self.max_slippage = 0.5  # Maximum acceptable slippage in %
+
+    def evaluate_trade(self, entry_price, stop_loss, take_profit, slippage):
+        """Evaluate trade based on risk-reward ratio & slippage constraints."""
+        risk = abs(entry_price - stop_loss)
+        reward = abs(take_profit - entry_price)
+
+        if reward / risk < self.risk_to_reward_ratio:
+            return "REJECTED: Poor Risk-Reward Ratio"
+        if slippage > self.max_slippage:
+            return "REJECTED: Excessive Slippage"
+
+        return "TRADE APPROVED"
+
+# ✅ Example Usage
+risk_manager = RiskManagement()
+decision = risk_manager.evaluate_trade(100, 95, 110, 0.3)
+
+print(f"Risk Decision: {decision}")

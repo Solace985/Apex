@@ -3,6 +3,8 @@ import json
 from brokers.broker_factory import BrokerFactory
 from core.config import Config
 
+# This file runs the bot by calling the retail_core.py file that is the core archetecture of the bot.
+
 def suggest_broker():
     """Suggests the best broker based on multiple factors."""
     # Dummy logic: Selects first broker from config

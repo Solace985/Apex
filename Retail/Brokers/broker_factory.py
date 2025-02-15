@@ -12,3 +12,8 @@ class BrokerFactory:
         elif broker_name.lower() == "binance":
             return BinanceBroker(api_key, api_secret)
         return DummyBroker()
+    
+    def get_broker(order_details):
+        brokers = [Zerodha(), Binance(), Upstox()]
+        best_broker = min(brokers, key=lambda broker: broker.estimate_fees(order_details))
+        return best_broker # smart broker selection based on fees liquidity and spread.

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Dict, Any
+from AI_Models.order_flow import InstitutionalOrderFlow
 
 class DataFeed:
     """Handles market data fetching asynchronously."""
@@ -27,3 +28,16 @@ class DataFeed:
     def stop(self):
         """Stops the data feed."""
         self.running = False
+
+
+    def __init__(self):
+        self.institutional_tracker = InstitutionalOrderFlow()
+
+    def fetch_market_data(self, symbol="BTCUSD"):
+        """Fetches price, volume & institutional bias."""
+        price = self.fetch_price(symbol)
+        volume = self.fetch_volume(symbol)
+        top_bid, top_ask = self.institutional_tracker.fetch_order_book_data(symbol)
+        institutional_bias = self.institutional_tracker.get_institutional_bias()
+
+        return {"price": price, "volume": volume, "top_bid": top_bid, "top_ask": top_ask, "institutional_bias": institutional_bias}
