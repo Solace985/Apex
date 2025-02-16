@@ -18,4 +18,22 @@ class RegimeDetectionStrategy:
 
         adx = 100 * np.mean(atr[-14:]) / np.mean(closes[-14:])  # ADX formula approximation
 
-        return "TRENDING" if adx > 25 else "RANGING"
+        # ✅ Compute Bollinger Bands
+        sma = np.mean(closes)  # 50-period SMA
+        std_dev = np.std(closes)
+        upper_band = sma + (2 * std_dev)
+        lower_band = sma - (2 * std_dev)
+
+        bollinger_bandwidth = (upper_band - lower_band) / sma  # ✅ Measures market compression
+
+        # ✅ Compute Volume Trend
+        volumes = market_data["volume"][-period:]
+        volume_trend = np.mean(volumes[-5:]) - np.mean(volumes[:5])  # ✅ Measures recent volume change
+
+        # ✅ Adjust Decision Logic
+        if adx > 25 and bollinger_bandwidth > 0.05 and volume_trend > 0:
+            return "TRENDING"
+        elif adx < 25 and bollinger_bandwidth < 0.03 and volume_trend < 0:
+            return "RANGING"
+        else:
+            return "NEUTRAL"
