@@ -191,3 +191,25 @@ class RiskManager:
         if abs(market_data["price"] - trade_signal["confidence"] * market_data["price"]) > 5:
             return False  # Reject trades with extreme price movement
         return True
+
+    def evaluate_trade(self, order: Dict[str, Any], market_data: Dict[str, Any]) -> str:
+        """Evaluate the risk of a trade and return a decision."""
+        if order.get("amount") > 10000:  # Example risk rule
+            return "REJECTED"
+
+        stop_loss = abs(order.get("entry_price") - order.get("stop_loss", 0))
+        take_profit = abs(order.get("take_profit", 0) - order.get("entry_price"))
+        risk_reward_ratio = take_profit / stop_loss if stop_loss > 0 else 0
+
+        if risk_reward_ratio < 2:
+            return "REJECTED: Poor Risk-Reward Ratio"
+
+        volatility = market_data.get("volatility", 0.01)
+        if volatility > 0.05:  # Example threshold
+            return "REJECTED: Excessive Market Volatility"
+
+        slippage = market_data.get("slippage", 0.005)
+        if slippage > self.max_drawdown:
+            return "REJECTED: Excessive Slippage"
+
+        return "TRADE APPROVED"

@@ -1,25 +1,19 @@
-from abc import ABC, abstractmethod
-from typing import Dict, Any
+class BrokerAPI:
+    """Handles interaction with the broker."""
 
-class BrokerAPI(ABC):
-    """Abstract class for broker integration."""
+    async def place_order(self, order):
+        """Send order to broker."""
+        # Simulate API request
+        return {"status": "SUCCESS", "order_id": order["id"]}
 
-    @abstractmethod
-    def place_order(self, order_details: Dict[str, Any]) -> Dict[str, Any]:
-        """Places an order with the broker."""
-        pass
-
-    @abstractmethod
     def fetch_account_balance(self) -> Dict[str, Any]:
         """Fetches the account balance from the broker."""
         pass
 
-    @abstractmethod
     def fetch_open_orders(self) -> Dict[str, Any]:
         """Fetches all open orders from the broker."""
         pass
 
-    @abstractmethod
     def cancel_order(self, order_id: str) -> bool:
-        """Cancels an order using the broker API."""
-        pass
+        """Cancel an order."""
+        return {"status": "CANCELLED", "order_id": order_id}

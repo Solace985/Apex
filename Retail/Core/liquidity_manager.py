@@ -1,9 +1,36 @@
 import requests
 import numpy as np
+from threading import Lock
+import time
+
+class RateLimiter:
+    """Prevents exceeding API call limits."""
+    def __init__(self, max_calls, period):
+        self.max_calls = max_calls
+        self.period = period
+        self.calls = []
+        self.lock = Lock()
+        self.failed_order_count = 0  # Track failed orders
+
+    def allow_request(self):
+        with self.lock:
+            now = time.time()
+            self.calls = [t for t in self.calls if now - t < self.period]
+
+            # 🚨 If too many API errors, reduce order rate
+            if self.failed_order_count > 3:
+                print("⚠ Too many failed orders. Reducing request rate.")  # Replace logger with print for simplicity
+                self.max_calls = max(1, self.max_calls - 1)  # 🔻 Reduce allowed orders
+
+            if len(self.calls) < self.max_calls:
+                self.calls.append(now)
+                return True
+            return False
 
 class LiquidityManager:
     def __init__(self):
         self.order_book_data = {}
+        self.rate_limiter = RateLimiter(10, 1)  # Initialize rate limiter
 
     def fetch_order_book(self, exchange: str, symbol: str):
         """Fetch real-time order book data from the exchange."""
@@ -12,6 +39,10 @@ class LiquidityManager:
         elif exchange == "kraken":
             url = f"https://api.kraken.com/0/public/Depth?pair={symbol}"
         else:
+            return None
+
+        if not self.rate_limiter.allow_request():
+            print("⚠ Rate limit exceeded. Delaying request.")  # Replace logger with print for simplicity
             return None
 
         response = requests.get(url)
