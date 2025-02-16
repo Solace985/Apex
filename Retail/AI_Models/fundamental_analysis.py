@@ -1,6 +1,6 @@
 import requests
 from textblob import TextBlob
-from ai_models.sentiment_analysis import SentimentAnalyzer
+from AI_Models.sentiment_analysis import SentimentAnalyzer
 
 class FundamentalAnalysis:
     """Combines economic indicators, institutional moves, and sentiment scores."""

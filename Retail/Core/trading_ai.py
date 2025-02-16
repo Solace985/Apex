@@ -22,8 +22,14 @@ class TradingAI:
         # Predict future price movement
         predicted_price = self.lstm_model.predict(scaled_data)
 
-        # Compute trade signal
-        tech_signal = self.technical_analysis.analyze(market_data)
+        # Compute technical indicators
+        rsi = self.technical_analysis.relative_strength_index(market_data["price"])
+        macd, signal = self.technical_analysis.macd(market_data["price"])
+        mfi = self.technical_analysis.money_flow_index(market_data["high"], market_data["low"], market_data["price"], market_data["volume"])
+
+        # Aggregate the final technical signal
+        tech_signal = (rsi * 0.3) + (macd * 0.3) + (mfi * 0.4)
+
         sentiment_score = self.sentiment_analyzer.get_sentiment(market_data)
         ai_decision = self.maddpg.select_action(tech_signal)
 
