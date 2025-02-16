@@ -1,4 +1,6 @@
 import logging
+from logging.handlers import RotatingFileHandler  # ✅ Import log rotation handler
+
 from typing import Dict, Any
 from brokers.broker_api import BrokerAPI
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -8,19 +10,39 @@ import random
 import time
 import websockets
 import json
+from threading import Lock
+import uuid
+
+# ✅ Setup log rotation (Max 5MB per file, keeps last 5 logs)
+log_handler = RotatingFileHandler("execution_engine.log", maxBytes=5*1024*1024, backupCount=5)
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+log_handler.setFormatter(formatter)
+
+# ✅ Configure logger to use rotating log files
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(log_handler)
+
+# ✅ Also log to console (optional but recommended)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 # This file routes the trades to brokers and executes them.
 
 class ExecutionEngine:
-    """
-    Handles trade execution, incorporating real-time risk evaluation
-    to prevent execution during unfavorable conditions.
-    """
+    """Handles trade execution with AI, risk validation, and rate limiting."""
 
     def __init__(self, broker_api, risk_manager, logger=None):
         self.broker_api = broker_api
         self.risk_manager = risk_manager  # ✅ Integrated risk manager
         self.logger = logger or logging.getLogger(__name__)
+        self.rate_limiter = RateLimiter(10, 1)  # Allow max 10 orders per second
+        self.failed_order_count = 0  # Track failed orders
+        self.executed_orders = set()  # 🛑 Track executed order IDs
+        self.max_failures = 5  # ⛔ Stop execution if more than 5 consecutive failures
+        self.failure_cooldown = 30  # ⏳ Pause execution for 30 seconds if circuit breaker is triggered
+
 
     @retry(
         stop=stop_after_attempt(3),
@@ -28,64 +50,76 @@ class ExecutionEngine:
         retry=retry_if_exception_type(RequestException)
     )
     async def execute_order(self, order):
-        """
-        Tries order execution with retries on failures.
-        """
-        try:
-            response = await self.broker_api.place_order(order)
-            self.logger.info(f"Order {order['id']} executed successfully")
-            return response
-        except (RequestException, TimeoutError) as e:
-            self.logger.error(f"Order {order['id']} failed: {str(e)}")
-            raise
+        """Executes an order only if AI confidence, risk evaluation, and rate limiting pass."""
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((RequestException, Timeout, HTTPError))
-    )
-    async def execute_order(self, order):
-        """
-        Tries order execution with retries on failures.
-        """
-        try:
-            self.validate_order(order)
-            start_time = time.time()
-            response = await self.broker_api.place_order(order)
-            execution_time = time.time() - start_time
-            await self.log_execution(order['id'], response, execution_time)
-            self.logger.info(f"Order {order['id']} executed successfully")
-            return response
-        except (RequestException, Timeout, HTTPError) as e:
-            self.logger.error(f"Order {order['id']} failed: {str(e)}")
-            raise
-        except ValueError as ve:
-            self.logger.error(f"Order {order['id']} validation error: {str(ve)}")
-            raise
-
-    async def execute_order(self, order_details):
-        """
-        Places a trade only if real-time risk assessment is favorable.
-        """
-        # ✅ Step 1: Check risk before execution
-        risk_decision = self.risk_manager.evaluate_trade(
-            entry_price=order_details["price"],
-            stop_loss=order_details["price"] * 0.98,
-            take_profit=order_details["price"] * 1.04,
-            slippage=order_details.get("slippage", 0),
-            market_data=order_details
-        )
-
-        if "REJECTED" in risk_decision:
-            self.logger.warning(f"Trade aborted due to dynamic risk evaluation: {risk_decision}")
+        # 🛑 Prevent duplicate execution
+        if order["id"] in self.executed_orders:
+            self.logger.warning(f"⚠ Order {order['id']} has already been executed. Skipping.")
             return False
 
-        # ✅ Step 2: Place order with real-time monitoring
+        # 💡 Split large orders into smaller ones
+        max_order_size = 1000  # Adjust based on liquidity
+
+        if order["amount"] > max_order_size:
+            num_parts = order["amount"] // max_order_size
+            self.logger.info(f"🔄 Splitting large order into {num_parts} smaller orders.")
+
+            for _ in range(num_parts):
+                small_order = order.copy()
+                small_order["amount"] = max_order_size
+                await self.execute_order(small_order)
+
+            return True  # ✅ Skip sending the original large order
+
+        # 🚨 AI Confidence Check (New Addition)
+        if "confidence" in order and order["confidence"] < 0.6:
+            self.logger.warning(f"⚠ Trade confidence too low ({order['confidence']}). Skipping execution.")
+            return False
+
+        # 🚨 Risk Validation
+        if "REJECTED" in self.risk_manager.evaluate_trade(order):
+            self.logger.warning(f"🚨 Trade aborted due to risk evaluation: {order}")
+            return False
+
+        # 🛑 Circuit breaker: Stop if too many failures
+        if self.failed_order_count >= self.max_failures:
+            self.logger.critical("🚨 Too many failed orders. Stopping execution for 30 seconds.")
+            await asyncio.sleep(self.failure_cooldown)
+            self.failed_order_count = 0  # Reset after cooldown
+
+        # 🚨 Rate-Limiting
+        if not self.rate_limiter.allow_request():
+            self.logger.warning("⚠ Rate limit exceeded. Delaying execution.")
+            time.sleep(1)
+
+        # If more than 3 consecutive failures, introduce a cooldown
+        if self.failed_order_count >= 3:
+            self.logger.warning("⚠ High failure rate detected. Cooling down for 5 seconds...")
+            await asyncio.sleep(5)
+            self.failed_order_count = 0  # Reset count
+
+        # 📊 Adaptive Retry Delay
+        market_volatility = self.get_market_volatility()  # 🔍 Get market conditions
+
+        if market_volatility > 0.8:
+            retry_delay = 1  # 🚀 Retry fast in high volatility
+        elif market_volatility > 0.5:
+            retry_delay = 3  # Moderate retry speed
+        else:
+            retry_delay = 5  # 🐢 Slow retry in stable market
+
+        self.logger.warning(f"⚠ Market volatility: {market_volatility}. Retrying in {retry_delay} seconds.")
+        await asyncio.sleep(retry_delay)
+
         try:
-            response = await self.broker_api.place_order(order_details)
+            response = await self.broker_api.place_order(order)
+            self.logger.info(f"✅ Order {order['id']} executed successfully")
+            self.failed_order_count = 0  # Reset failure count on success
+            self.executed_orders.add(order["id"])  # Mark order as executed
             return response
         except Exception as e:
-            self.logger.error(f"Trade execution failed: {e}")
+            self.failed_order_count += 1  # Increment failure count
+            self.logger.error(f"❌ Trade execution failed: {e}")
             return None
 
     async def execute_orders_concurrently(self, orders):
@@ -120,24 +154,66 @@ class ExecutionEngine:
         # Example: Use a token bucket algorithm or similar approach
         pass
 
-    # Stealth Trading Features
-    def __init__(self, broker_api):
-        self.broker_api = broker_api
-
-    def execute_trade(self, order_details):
-        delay = random.uniform(0.1, 1.5)  # Random delay between 100ms and 1.5 seconds
-        time.sleep(delay)
-        self.broker_api.place_order(order_details)
-        return f"Executed trade after {round(delay, 2)} seconds"
-    
-    # Advanced order execution:
     def execute_trade(self, order_details, order_type="market"):
-        if order_type == "market":
-            self.broker_api.place_market_order(order_details)
-        elif order_type == "limit":
-            self.broker_api.place_limit_order(order_details)
-        elif order_type == "stop":
-            self.broker_api.place_stop_order(order_details)
+        """Executes market, limit, or stop orders with rate-limiting checks."""
+        
+        # Enforce rate limiting
+        if not self.rate_limiter.allow_request():
+            self.logger.warning("⚠ Rate limit exceeded. Delaying execution.")
+            time.sleep(1)
+
+        valid_order_types = ["market", "limit", "stop"]
+        if order_type not in valid_order_types:
+            raise ValueError(f"❌ Invalid order type: {order_type}")
+
+        return self.broker_api.place_order(order_details)
+
+    def cancel_order(self, order_id):
+        """Cancels an order with retry logic if the first attempt fails."""
+        max_retries = 3
+        attempt = 0
+
+        while attempt < max_retries:
+            try:
+                order_status = self.broker_api.get_order_status(order_id)
+
+                if order_status == "FILLED":
+                    self.logger.warning(f"⚠ Order {order_id} is already filled. Cannot cancel.")
+                    return None
+
+                response = self.broker_api.cancel_order(order_id)
+                self.logger.info(f"✅ Order {order_id} cancelled successfully")
+                return response
+            except Exception as e:
+                self.logger.error(f"❌ Failed to cancel order {order_id}: {e}. Retrying...")
+                attempt += 1
+                time.sleep(2)  # Wait before retrying
+
+        self.logger.error(f"🚨 Order {order_id} could not be cancelled after multiple attempts.")
+        return None
+
+class RateLimiter:
+    """Prevents exceeding API call limits."""
+    def __init__(self, max_calls, period):
+        self.max_calls = max_calls
+        self.period = period
+        self.calls = []
+        self.lock = Lock()
+
+    def allow_request(self):
+        with self.lock:
+            now = time.time()
+            self.calls = [t for t in self.calls if now - t < self.period]
+            
+            # 🚨 If too many API errors, reduce order rate
+            if self.failed_order_count > 3:
+                self.logger.warning(f"⚠ Too many failed orders. Reducing request rate.")
+                self.max_calls = max(1, self.max_calls - 1)  # 🔻 Reduce allowed orders
+
+            if len(self.calls) < self.max_calls:
+                self.calls.append(now)
+                return True
+            return False
 
 class SmartOrderRouter:
     """Optimizes order execution across multiple brokers to minimize costs."""
@@ -146,8 +222,15 @@ class SmartOrderRouter:
         self.broker_list = broker_list
 
     def choose_best_broker(self, trade_details):
-        """Selects the broker with lowest slippage & fees."""
-        best_broker = min(self.broker_list, key=lambda broker: broker.get_execution_cost(trade_details))
+        """Selects the broker with the best combination of execution cost, speed, and market depth."""
+        best_broker = min(
+            self.broker_list,
+            key=lambda broker: (
+                broker.get_execution_cost(trade_details)
+                + broker.get_execution_latency(trade_details)
+                - broker.get_order_book_depth(trade_details)
+            )
+        )
         return best_broker
 
 class HFTExecutionEngine:
@@ -166,20 +249,106 @@ class HFTExecutionEngine:
         return True
 
 class WebSocketExecutionEngine:
-    def __init__(self, broker_api):
+    FATAL_ERRORS = ["INSUFFICIENT_FUNDS", "INVALID_SYMBOL", "ACCOUNT_BANNED"]
+
+    def __init__(self, broker_api, logger=None):
         self.broker_api = broker_api
         self.websocket_url = "wss://your-broker-websocket-endpoint"
         self.websocket = None
+        self.logger = logger or logging.getLogger(__name__)  # ✅ Fix: Add logger
 
     async def connect(self):
-        self.websocket = await websockets.connect(self.websocket_url)
-        print("Connected to broker WebSocket.")
+        """Attempts to establish a WebSocket connection with a limited number of reconnect attempts."""
+        self.websocket_retries = 0  # Track reconnect attempts
+        self.max_reconnects = 10  # ⏳ Force reset if too many reconnect attempts
+
+        while self.websocket_retries < self.max_reconnects:  # Limit retry attempts
+            try:
+                self.websocket = await websockets.connect(self.websocket_url)
+                self.logger.info("✅ Connected to broker WebSocket.")
+                asyncio.create_task(self.send_heartbeat())  # ✅ Start heartbeat
+                return
+            except Exception as e:
+                self.logger.error(f"❌ WebSocket connection failed (Attempt {self.websocket_retries + 1}): {e}. Retrying in {2 ** self.websocket_retries} seconds...")
+                self.websocket_retries += 1  # Increment failed reconnect attempts
+                await asyncio.sleep(2 ** self.websocket_retries)  # Exponential backoff
+
+        if self.websocket_retries >= self.max_reconnects:
+            self.logger.critical("🚨 WebSocket failed to reconnect after multiple attempts. Resetting connection.")
+            self.websocket_retries = 0  # Reset attempt count
+            await asyncio.sleep(10)  # Prevent API bans due to excessive reconnection attempts
+            self.websocket = None  # Reset the websocket connection
 
     async def send_order(self, order_details):
+        """Sends an order via WebSocket with a unique request ID and timeout mechanism."""
+        order_details["request_id"] = str(uuid.uuid4())  # Generate a unique ID
         order_payload = json.dumps(order_details)
-        await self.websocket.send(order_payload)
-        response = await self.websocket.recv()
-        print("Order Response:", response)
+        max_retries = 3
+        attempt = 0
+        failure_count = 0  # Track the number of failed orders
+
+        while attempt < max_retries:
+            try:
+                if not self.websocket or not self.websocket.open:
+                    self.logger.warning("⚠ WebSocket disconnected. Waiting for reconnection...")
+                    await asyncio.sleep(5)  # Delay execution to prevent flooding
+
+                self.logger.info(f"🔄 Attempt {attempt+1}/{max_retries} - Sending order {order_details['id']} via WebSocket...")
+                await asyncio.wait_for(self.websocket.send(order_payload), timeout=5)
+                response = await asyncio.wait_for(self.websocket.recv(), timeout=5)
+                response_data = json.loads(response)
+
+                if response_data.get("error_code") in self.FATAL_ERRORS:
+                    self.logger.critical(f"🚨 Fatal error for order {order_details['id']}: {response_data['error_code']}. Not retrying.")
+                    return None  # Stop retrying for fatal errors
+
+                if response_data.get("status") == "FILLED":
+                    self.logger.info(f"✅ Order {order_details['id']} successfully filled.")
+                    return response_data
+                elif response_data.get("status") == "PARTIALLY_FILLED":
+                    self.logger.warning(f"⚠ Order {order_details['id']} partially filled.")
+                    return response_data
+                elif response_data.get("status") == "REJECTED":
+                    self.logger.error(f"❌ Order {order_details['id']} rejected. Retrying...")
+                    attempt += 1
+                    failure_count += 1  # Increment failure count
+                    await asyncio.sleep(2)
+                else:
+                    return response_data
+
+            except asyncio.TimeoutError:
+                self.logger.error(f"⏳ Order {order_details['id']} timed out. Retrying...")
+                attempt += 1
+                failure_count += 1  # Increment failure count
+                await asyncio.sleep(2)
+
+            # ⏳ WebSocket failed, switching to REST API
+            if self.websocket is None or not self.websocket.open:
+                self.logger.warning("⚠ WebSocket is down. Switching to REST API for order execution.")
+                return await self.broker_api.place_order(order_details)  # ⏩ Use REST API instead
+
+        if failure_count >= 5:
+            self.logger.critical("🚨 Too many failed orders. Stopping execution.")
+            return None
+
+    async def send_heartbeat(self):
+        """Sends periodic pings to keep WebSocket connection alive."""
+        while True:
+            try:
+                if self.websocket and self.websocket.open:  # ✅ Fix: Check if connected
+                    await self.websocket.ping()
+                    self.logger.info("💓 WebSocket heartbeat sent.")
+                else:
+                    self.logger.warning("⚠ WebSocket disconnected. Attempting to reconnect...")
+                    await self.connect()  # ✅ Auto-reconnect
+
+                await asyncio.sleep(30)  # Send heartbeat every 30 seconds
+
+            except asyncio.CancelledError:
+                self.logger.info("🛑 WebSocket heartbeat task cancelled.")
+                break  # Exit the loop if the task is cancelled
+            except Exception as e:
+                self.logger.warning(f"⚠ WebSocket heartbeat failed: {e}")
 
     async def close_connection(self):
         await self.websocket.close()

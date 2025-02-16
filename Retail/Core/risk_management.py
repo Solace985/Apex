@@ -165,6 +165,8 @@ class ReinforcementRiskManagement:
 import numpy as np
 
 class RiskManager:
+    """Manages risk by validating trade conditions."""
+
     def __init__(self, max_drawdown=0.02):
         self.max_drawdown = max_drawdown
 
@@ -183,3 +185,9 @@ class RiskManager:
         
         position_size = (risk_capital * kelly_fraction) / volatility
         return round(position_size, 2)
+
+    def is_safe_trade(self, trade_signal, market_data):
+        """Checks if the trade meets risk criteria."""
+        if abs(market_data["price"] - trade_signal["confidence"] * market_data["price"]) > 5:
+            return False  # Reject trades with extreme price movement
+        return True

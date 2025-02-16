@@ -24,10 +24,9 @@ from keras.layers import LSTM, Dense
 from AI_Models.maddpg_model import MADDPG
 import numpy as np
 from Retail.Utils.logger import setup_logger
-from Retail.Utils.data_feed import DataFeed
+from Retail.Utils.data_feed import DataFeed as UtilsDataFeed
 from Retail.Utils.strategy_manager import StrategyManager
-from Retail.Core.execution_engine import ExecutionEngine
-from Retail.Utils.risk_manager import RiskManager
+from Retail.Utils.risk_manager import RiskManager as UtilsRiskManager
 from Retail.AI_Models.machine_learning import MachineLearningModel
 from joblib import Parallel, delayed
 from Retail.Core.liquidity_manager import LiquidityManager
@@ -35,10 +34,17 @@ import requests
 from textblob import TextBlob
 from ai_models.fundamental_analysis import FundamentalAnalysis
 from ai_models.sentiment_analysis import SentimentAnalyzer
-from ai_models.liquidity_manager import LiquidityManager
+from ai_models.liquidity_manager import LiquidityManager as AIModulesLiquidityManager
 from ai_models.technical_analysis import TechnicalAnalysis
 from ai_models.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
 from Retail.Utils.risk_management import AdaptiveRiskManagement
+import time
+from Retail.Core.data_feed import DataFeed
+from Retail.AI_Models.trading_ai import TradingAI
+from Retail.Core.risk_management import RiskManager
+from Retail.Core.execution_engine import ExecutionEngine
+from Retail.Metrics.performance_metrics import PerformanceTracker
+from Retail.Brokers.broker_factory import BrokerFactory
 
 
 # This file is the core of the bot that is responsible for handling the strategy and execution of the trades.
@@ -275,7 +281,61 @@ class Logger:
         self.logger.error(f"Error: {error}")
 
 class RetailBotCore:
-    """Main trading bot logic integrating all AI models, including MADDPG."""
+    """Main controller for the trading bot, integrating data, AI, risk management, and execution."""
+
+    def __init__(self):
+        # Initialize essential components
+        self.data_feed = DataFeed()
+        self.trading_ai = TradingAI()
+        self.risk_manager = RiskManager()
+        self.execution_engine = ExecutionEngine()
+        self.performance_tracker = PerformanceTracker()
+
+        # Select broker (change to preferred broker)
+        self.broker = BrokerFactory.create_broker("binance")
+        self.execution_engine.initialize_broker(self.broker)
+
+        # Trading Settings
+        self.polling_interval = 1  # Time in seconds between each loop
+
+    def run(self):
+        """Main trading loop - runs continuously until stopped."""
+        print("🚀 Trading Bot Started...")
+
+        while True:
+            try:
+                # Step 1: Fetch Market Data
+                market_data = self.data_feed.get_market_data()
+                if not market_data:
+                    print("⚠ Market data not available. Skipping this cycle.")
+                    time.sleep(self.polling_interval)
+                    continue
+                
+                # Step 2: Generate Trade Signal
+                trade_signal = self.trading_ai.get_trade_signal(market_data)
+                if trade_signal is None:
+                    print("ℹ No valid trade signal generated. Waiting for the next cycle.")
+                    time.sleep(self.polling_interval)
+                    continue
+                
+                # Step 3: Validate Risk & Market Conditions
+                if not self.risk_manager.is_safe_trade(trade_signal, market_data):
+                    print("🚨 Trade rejected due to risk constraints.")
+                    time.sleep(self.polling_interval)
+                    continue
+
+                # Step 4: Execute Trade
+                execution_result = self.execution_engine.execute_trade(trade_signal)
+                if execution_result:
+                    print(f"✅ Trade executed: {execution_result}")
+
+                # Step 5: Track Performance & Adapt Strategy
+                self.performance_tracker.record_trade(execution_result)
+
+            except Exception as e:
+                print(f"❌ Error in trading loop: {e}")
+
+        time.sleep(self.polling_interval)  # Wait before fetching new market data
 
     def __init__(self, execution_engine, risk_manager):
         self.execution_engine = execution_engine
@@ -433,10 +493,6 @@ class RetailBotCore:
 
     def backtest(self, df):
         # Placeholder for backtesting logic
-        pass
-
-    def run(self):
-        # Main loop for running the bot
         pass
 
     async def safe_execute_trade(self, trade):
