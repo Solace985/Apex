@@ -16,23 +16,25 @@ class WebSocketExecutionEngine:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     async def connect(self):
-        """Attempts to establish a WebSocket connection with retry logic."""
+        """Attempts to establish a WebSocket connection with proper cleanup."""
+        if self.websocket:
+            await self.websocket.close()  # ✅ Close any existing WebSocket before reconnecting
+
         retries = 0
         max_retries = 10
-
         while retries < max_retries:
             try:
                 self.websocket = await websockets.connect(self.websocket_url)
                 self.logger.info("✅ Connected to broker WebSocket.")
-                asyncio.create_task(self.send_heartbeat())  # Start heartbeat
+                asyncio.create_task(self.send_heartbeat())
                 return
             except Exception as e:
-                self.logger.error(f"❌ WebSocket connection failed: {e}. Retrying in {2 ** retries} seconds...")
+                self.logger.error(f"❌ WebSocket connection failed (Attempt {retries+1}/{max_retries}): {e}")
                 retries += 1
                 await asyncio.sleep(2 ** retries)
 
-        self.logger.critical("🚨 WebSocket failed to reconnect after multiple attempts.")
-        self.websocket = None
+        self.logger.critical("🚨 WebSocket failed to reconnect after multiple attempts. Switching to REST API.")
+        self.websocket = None  # Ensure websocket is set to None after failure
 
     async def send_order(self, order_details):
         """Sends an order via WebSocket with a unique request ID and timeout mechanism."""
@@ -62,8 +64,11 @@ class WebSocketExecutionEngine:
                     self.logger.info(f"✅ Order {order_details['id']} successfully filled.")
                     return response_data
                 elif response_data.get("status") == "PARTIALLY_FILLED":
-                    self.logger.warning(f"⚠ Order {order_details['id']} partially filled.")
-                    return response_data
+                    remaining_qty = order_details["amount"] - response_data["filled_quantity"]
+                    if remaining_qty > 0:
+                        order_details["amount"] = remaining_qty
+                        self.logger.warning(f"⚠ Order {order_details['id']} partially filled. Adjusting remaining quantity and resending...")
+                        return await self.send_order(order_details)  # 🔁 Retry with remaining order
                 elif response_data.get("status") == "REJECTED":
                     self.logger.error(f"❌ Order {order_details['id']} rejected. Retrying...")
                     attempt += 1
@@ -72,11 +77,20 @@ class WebSocketExecutionEngine:
                 else:
                     return response_data
 
+            except websockets.exceptions.ConnectionClosed as e:
+                self.logger.error(f"❌ WebSocket send failed: {e}. Reconnecting...")
+                await self.connect()
+                return await self.send_order(order_details)  # 🔁 Retry sending order after reconnecting
             except asyncio.TimeoutError:
                 self.logger.error(f"⏳ Order {order_details['id']} timed out. Retrying...")
                 attempt += 1
                 failure_count += 1  # Increment failure count
                 await asyncio.sleep(2)
+            except Exception as e:
+                self.logger.error(f"❌ Unexpected error sending WebSocket order: {e}. Retrying in 5 seconds...")
+                attempt += 1  # 🔄 Increment attempt count
+                failure_count += 1
+                await asyncio.sleep(5)  # ⏳ Delay before retrying
 
             # ⏳ WebSocket failed, switching to REST API
             if self.websocket is None or not self.websocket.open:
