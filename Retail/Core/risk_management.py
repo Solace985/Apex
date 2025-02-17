@@ -3,21 +3,23 @@ import numpy as np
 from typing import Dict, Any
 from keras.models import Sequential
 from keras.layers import Dense
+from Retail.Core.config import load_config
+
+config = load_config()
 
 class RiskManagement:
     """Handles risk evaluation and position sizing."""
     
-    def __init__(self, data_feed, portfolio_state, strategy_stats, config):
+    def __init__(self, data_feed, portfolio_state, strategy_stats):
         self.data_feed = data_feed
         self.portfolio_state = portfolio_state
         self.strategy_stats = strategy_stats
-        self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def evaluate_risk(self, trade_details: Dict[str, Any]) -> bool:
         """Rejects trades exceeding risk threshold."""
         risk = trade_details.get("risk", 0)
-        if risk > self.config.risk.max_drawdown:
+        if risk > config.risk.max_drawdown:
             self.logger.warning(f"Trade rejected due to high risk: {trade_details}")
             return False
         return True
@@ -25,7 +27,7 @@ class RiskManagement:
     def adjust_position_size(self, trade_details: Dict[str, Any]) -> Dict[str, Any]:
         """Adjusts position size dynamically based on risk."""
         risk = trade_details.get("risk", 0.01)
-        trade_details["position_size"] = min(1.0, self.config.risk.capital_exposure_limit / risk)
+        trade_details["position_size"] = min(1.0, config.risk.capital_exposure_limit / risk)
         return trade_details
 
     def calculate_position_size(self, symbol, strategy_type):
@@ -34,7 +36,7 @@ class RiskManagement:
         """
         volatility = self.data_feed.get_historical_volatility(symbol)
         account_equity = self.portfolio_state.equity
-        risk_capital = account_equity * self.config.risk.max_drawdown
+        risk_capital = account_equity * config.risk.max_drawdown
         
         win_rate = self.strategy_stats[strategy_type]['win_rate']
         avg_win_loss_ratio = self.strategy_stats[strategy_type]['pnl_ratio']
@@ -46,11 +48,10 @@ class RiskManagement:
 class AdaptiveRiskManagement:
     """Dynamically adjusts risk based on market volatility & liquidity."""
 
-    def __init__(self, data_feed, portfolio_state, strategy_stats, config):
+    def __init__(self, data_feed, portfolio_state, strategy_stats):
         self.data_feed = data_feed
         self.portfolio_state = portfolio_state
         self.strategy_stats = strategy_stats
-        self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def adjust_risk_parameters(self, market_data: Dict[str, Any]):
@@ -61,10 +62,10 @@ class AdaptiveRiskManagement:
         liquidity = market_data.get("order_book_liquidity", 0)  # Fetch liquidity data
         
         # If volatility is high, reduce drawdown & risk exposure
-        if volatility > self.config.risk.volatility_threshold:
-            self.config.risk.max_drawdown = 0.1  # Reduce drawdown limit
-            self.config.risk.capital_exposure_limit = 0.05  # Lower position size
-            self.logger.warning(f"High Volatility Detected: Reducing Risk Exposure (Max Drawdown: {self.config.risk.max_drawdown}, Position Size: {self.config.risk.capital_exposure_limit})")
+        if volatility > config.risk.volatility_threshold:
+            config.risk.max_drawdown = 0.1  # Reduce drawdown limit
+            config.risk.capital_exposure_limit = 0.05  # Lower position size
+            self.logger.warning(f"High Volatility Detected: Reducing Risk Exposure (Max Drawdown: {config.risk.max_drawdown}, Position Size: {config.risk.capital_exposure_limit})")
 
         # If liquidity is low, avoid trading
         if liquidity < 5000:  # Assuming a fixed liquidity threshold
@@ -87,7 +88,7 @@ class AdaptiveRiskManagement:
         if reward / risk < 2:  # Maintain at least 1:2 risk-reward ratio
             return "REJECTED: Poor Risk-Reward Ratio"
 
-        if slippage > self.config.risk.max_drawdown:
+        if slippage > config.risk.max_drawdown:
             return "REJECTED: Excessive Slippage"
 
         return "TRADE APPROVED"
@@ -162,13 +163,12 @@ class ReinforcementRiskManagement:
         
         return "TRADE APPROVED"
 
-import numpy as np
-
 class RiskManager:
     """Manages risk by validating trade conditions."""
 
-    def __init__(self, max_drawdown=0.02):
-        self.max_drawdown = max_drawdown
+    def __init__(self):
+        self.max_drawdown = config.risk.max_drawdown
+        self.stop_loss = config.risk.stop_loss
 
     def calculate_position_size(self, symbol, strategy_type, portfolio_state, strategy_stats, data_feed):
         """

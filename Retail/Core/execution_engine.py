@@ -18,6 +18,10 @@ from Core.risk_management import RiskManager
 from Brokers.broker_api import BrokerAPI
 from Core.hft import HFTExecutionEngine
 from Brokers.websocket_handler import WebSocketExecutionEngine
+from tenacity import retry, stop_after_attempt
+from Core.config import load_config  # Import load_config
+
+config = load_config()  # Load configuration
 
 logger = get_logger("execution_engine")
 
@@ -35,15 +39,17 @@ class ExecutionEngine:
         self.executed_orders = set()  # 🛑 Track executed order IDs
         self.max_failures = 5  # ⛔ Stop execution if more than 5 consecutive failures
         self.failure_cooldown = 30  # ⏳ Pause execution for 30 seconds if circuit breaker is triggered
+        
+        # New attributes from config
+        self.trade_confirmation = config.execution.trade_confirmation_required
+        self.slippage_protection = config.execution.slippage_protection
 
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(RequestException)
-    )
+    @retry(stop=stop_after_attempt(3))
     async def execute_order(self, order):
         """Executes an order only if AI confidence, risk evaluation, and rate limiting pass."""
+
+        if not order['symbol'] in self.config['ALLOWED_SYMBOLS']:
+            raise InvalidOrderError(f"Symbol {order['symbol']} not allowed")
 
         # 🛑 Prevent duplicate execution
         if order["id"] in self.executed_orders:
@@ -110,6 +116,13 @@ class ExecutionEngine:
             self.logger.info(f"✅ Order {order['id']} executed successfully")
             self.failed_order_count = 0  # Reset failure count on success
             self.executed_orders.add(order["id"])  # Mark order as executed
+            
+            return self.broker_api.place_order(
+                symbol=order['symbol'],
+                qty=order['amount'],
+                order_type="LIMIT",
+                price=order['price'] * 1.001  # Avoid slippage
+            )
         except Exception as e:
             self.failed_order_count += 1  # Increment failure count
             self.logger.error(f"❌ Trade execution failed: {e}")

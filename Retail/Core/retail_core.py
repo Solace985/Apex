@@ -23,28 +23,31 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from AI_Models.maddpg_model import MADDPG
 import numpy as np
-from Retail.Utils.logger import setup_logger
-from Retail.Utils.data_feed import DataFeed as UtilsDataFeed
-from Retail.Utils.strategy_manager import StrategyManager
-from Retail.Utils.risk_manager import RiskManager as UtilsRiskManager
+from Retail.utils.logger import setup_logger
+from Retail.utils.data_feed import DataFeed as UtilsDataFeed
+from Retail.utils.strategy_manager import StrategyManager
+from Retail.utils.risk_manager import RiskManager as UtilsRiskManager
 from Retail.AI_Models.machine_learning import MachineLearningModel
 from joblib import Parallel, delayed
 from Retail.Core.liquidity_manager import LiquidityManager
 import requests
 from textblob import TextBlob
-from ai_models.fundamental_analysis import FundamentalAnalysis
-from ai_models.sentiment_analysis import SentimentAnalyzer
-from ai_models.liquidity_manager import LiquidityManager as AIModulesLiquidityManager
-from ai_models.technical_analysis import TechnicalAnalysis
-from ai_models.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
-from Retail.Utils.risk_management import AdaptiveRiskManagement
+from AI_Models.fundamental_analysis import FundamentalAnalysis
+from AI_Models.sentiment_analysis import SentimentAnalyzer
+from Core.liquidity_manager import LiquidityManager as AIModulesLiquidityManager
+from AI_Models.technical_analysis import TechnicalAnalysis
+from AI_Models.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
+from Retail.Core.risk_management import AdaptiveRiskManagement
 import time
 from Retail.Core.data_feed import DataFeed
-from Retail.AI_Models.trading_ai import TradingAI
+from Retail.Core.trading_ai import TradingAI
 from Retail.Core.risk_management import RiskManager
 from Retail.Core.execution_engine import ExecutionEngine
 from Retail.Metrics.performance_metrics import PerformanceTracker
 from Retail.Brokers.broker_factory import BrokerFactory
+from Retail.Strategies.trend_following import TrendFollowingStrategy
+from Retail.Strategies.mean_reversion import MeanReversionStrategy
+from concurrent.futures import ProcessPoolExecutor
 
 
 # This file is the core of the bot that is responsible for handling the strategy and execution of the trades.
@@ -210,21 +213,38 @@ class DataFeed:
 # ✅ Strategy Management System
 # --------------------------
 class StrategyManager:
-    def __init__(self):
-        self.strategies: List[Strategy] = []
+    def __init__(self, data_feed, risk_manager, execution_engine):
+        self.strategies: List[Strategy] = self._load_strategies()
+        self.risk_manager = risk_manager
+        self.execution_engine = execution_engine
+        self.logger = logging.getLogger(self.__class__.__name__)
+        
+        data_feed.subscribe(self.on_market_data)  # Connects StrategyManager to DataFeed
+
+    def on_market_data(self, data):
+        for strategy in self.strategies:
+            signal = strategy.generate_signal(data)
+            if signal:
+                self.logger.info(f"Strategy {strategy.__class__.__name__} generated signal: {signal}")
+                if self.risk_manager.validate(signal):
+                    self.execution_engine.execute(signal)  # Trade execution
 
     def add_strategy(self, strategy: Strategy):
         self.strategies.append(strategy)
 
     def evaluate_strategies(self, market_data: Dict[str, Any]):
         signals = []
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with concurrent.futures.ProcessPoolExecutor() as executor:  # Uses multiple CPU cores
             futures = {executor.submit(strategy.generate_signal, market_data): strategy for strategy in self.strategies}
             for future in concurrent.futures.as_completed(futures):
                 signal = future.result()
                 if signal:
                     signals.append(signal)
         return signals
+
+    def _load_strategies(self):
+        strategy_classes = [TrendFollowingStrategy, MeanReversionStrategy]
+        return [strategy() for strategy in strategy_classes if strategy.is_active]
 
 class ExecutionEngine:
     def __init__(self, broker_api):

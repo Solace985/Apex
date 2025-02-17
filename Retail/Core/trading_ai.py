@@ -1,3 +1,7 @@
+from Retail.Core.config import load_config
+
+config = load_config()
+
 from Retail.AI_Models.lstm_model import LSTMModel
 from Retail.AI_Models.technical_analysis import TechnicalAnalysis
 from Retail.AI_Models.sentiment_analysis import SentimentAnalyzer
@@ -11,6 +15,8 @@ class TradingAI:
         self.technical_analysis = TechnicalAnalysis()
         self.sentiment_analyzer = SentimentAnalyzer()
         self.maddpg = MADDPG(state_dim=10, action_dim=1)
+        self.enable_live_adaptation = config.ai_trading.enable_live_adaptation
+        self.strategy_selection = config.ai_trading.strategy_selection
 
     def get_trade_signal(self, market_data):
         """

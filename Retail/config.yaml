@@ -1,6 +1,0 @@
-data_feed_interval: 1
-risk_threshold: 0.02
-broker_api_keys:
-  zerodha: 'your_zerodha_api_key'
-  binance: 'your_binance_api_key'
-database_path: 'storage/trade_history.db'

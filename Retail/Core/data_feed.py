@@ -1,60 +1,79 @@
 import asyncio
 import logging
 import requests
+import websockets
 from typing import Dict, Any
+from polygon import WebSocketClient
 from AI_Models.order_flow import InstitutionalOrderFlow
+from Retail.Core.config import load_config
+
+config = load_config()
 
 class DataFeed:
-    """Handles market data fetching asynchronously and fetches real-time market data from exchange APIs."""
+    """Handles real-time market data fetching via WebSockets and institutional order flow tracking."""
 
     def __init__(self, interval: int = 1):
         self.market_data: Dict[str, Any] = {}
         self.interval = interval
         self.running = False
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.api_url = "https://api.binance.com/api/v3/ticker/price"
+        
+        self.polygon_key = config.websocket.polygon_key
+        self.symbols = config.websocket.symbols
+        
+        # Polygon WebSocket Setup
+        self.ws_client = WebSocketClient(
+            api_key=self.polygon_key,
+            subscriptions=[f"T.{symbol}" for symbol in self.symbols]
+        )
+        
+        # Institutional Order Flow Tracker
         self.institutional_tracker = InstitutionalOrderFlow()
 
-    async def fetch_data(self):
-        """Fetches market data asynchronously."""
-        while self.running:
-            self.logger.info("Fetching market data...")
-            # Simulate fetching market data (Replace this with real API call)
-            self.market_data = self.get_market_data()
-            await asyncio.sleep(self.interval)
+    async def start_stream(self):
+        """Starts WebSocket stream for real-time data."""
+        self.running = True
+        async with self.ws_client as ws:
+            async for msg in ws:
+                self.process_message(msg)
+
+    def process_message(self, msg):
+        """Processes WebSocket messages and updates market data."""
+        structured_data = {
+            "symbol": msg.symbol,
+            "price": msg.price,
+            "volume": msg.volume,
+            "timestamp": msg.timestamp
+        }
+        # Fetch additional market insights
+        structured_data.update(self.fetch_order_flow_data(msg.symbol))
+        self.market_data[msg.symbol] = structured_data
 
     async def start(self):
-        """Starts the data feed."""
-        self.running = True
-        await self.fetch_data()
+        """Starts both WebSocket streaming and order flow tracking."""
+        await asyncio.gather(
+            self.start_stream(),  # WebSocket Data Feed
+            self.fetch_data()  # Order Flow Fetching
+        )
+
+    async def fetch_data(self):
+        """Fetches institutional order flow asynchronously at fixed intervals."""
+        while self.running:
+            self.logger.info("Fetching market order flow data...")
+            for symbol in self.market_data.keys():
+                self.market_data[symbol].update(self.fetch_order_flow_data(symbol))
+            await asyncio.sleep(self.interval)
+
+    def fetch_order_flow_data(self, symbol):
+        """Fetches top bid, top ask & institutional bias for a given symbol."""
+        try:
+            top_bid, top_ask = self.institutional_tracker.fetch_order_book_data(symbol)
+            institutional_bias = self.institutional_tracker.get_institutional_bias()
+            return {"top_bid": top_bid, "top_ask": top_ask, "institutional_bias": institutional_bias}
+        except Exception as e:
+            self.logger.error(f"❌ Error fetching order flow data: {e}")
+            return {}
 
     def stop(self):
         """Stops the data feed."""
         self.running = False
-
-    def get_market_data(self, symbol="BTCUSDT"):
-        """Fetches latest market data for the given trading pair."""
-        try:
-            response = requests.get(self.api_url, params={"symbol": symbol})
-            if response.status_code == 200:
-                data = response.json()
-                return {
-                    "symbol": symbol,
-                    "price": float(data["price"]),
-                    "volume": 1  # Placeholder, should be replaced with actual volume
-                }
-            else:
-                self.logger.error(f"❌ API error: {response.status_code}")
-                return None
-        except Exception as e:
-            self.logger.error(f"❌ Error fetching market data: {e}")
-            return None
-
-    def fetch_market_data(self, symbol="BTCUSD"):
-        """Fetches price, volume & institutional bias."""
-        market_data = self.get_market_data(symbol)
-        if market_data:
-            top_bid, top_ask = self.institutional_tracker.fetch_order_book_data(symbol)
-            institutional_bias = self.institutional_tracker.get_institutional_bias()
-            market_data.update({"top_bid": top_bid, "top_ask": top_ask, "institutional_bias": institutional_bias})
-        return market_data

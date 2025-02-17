@@ -1,14 +1,16 @@
 import logging
 import json
-from brokers.broker_factory import BrokerFactory
-from core.config import Config
+from Brokers.broker_factory import BrokerFactory
+from Core.config import load_config
 
-# This file runs the bot by calling the retail_core.py file that is the core archetecture of the bot.
+# Load configuration at startup
+config = load_config()
+
+print(f"Starting bot in {config.mode} mode...")  # Logs the current trading mode
 
 def suggest_broker():
     """Suggests the best broker based on multiple factors."""
     # Dummy logic: Selects first broker from config
-    config = Config()
     suggested_broker = config.supported_brokers[0] if config.supported_brokers else "dummy"
 
     print(f"⚡ Suggested Broker: {suggested_broker}")
@@ -16,7 +18,6 @@ def suggest_broker():
 
 def get_user_selected_broker():
     """Prompts user for broker selection."""
-    config = Config()
     print(f"Supported Brokers: {', '.join(config.supported_brokers)}")
     
     broker_name = input("Enter your preferred broker (or press Enter to use suggested): ").strip()
@@ -29,7 +30,6 @@ def generate_api_keys(broker_name):
     return {"api_key": f"generated_key_{broker_name}", "api_secret": f"generated_secret_{broker_name}"}
 
 def main():
-    config = Config()
     selected_broker = get_user_selected_broker()
     
     print(f"✅ Integrating with {selected_broker}...")
