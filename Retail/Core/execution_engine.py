@@ -20,6 +20,8 @@ from Core.hft import HFTExecutionEngine
 from Brokers.websocket_handler import WebSocketExecutionEngine
 from tenacity import retry, stop_after_attempt
 from Core.config import load_config  # Import load_config
+from session_detector import TradingSessionDetector
+from Core.strategy_selector import StrategyManager
 
 config = load_config()  # Load configuration
 
@@ -43,6 +45,7 @@ class ExecutionEngine:
         # New attributes from config
         self.trade_confirmation = config.execution.trade_confirmation_required
         self.slippage_protection = config.execution.slippage_protection
+        self.session_detector = TradingSessionDetector()  # Initialize session detector
 
     @retry(stop=stop_after_attempt(3))
     async def execute_order(self, order):
@@ -111,6 +114,21 @@ class ExecutionEngine:
         if "REJECTED" in risk_result:
             self.logger.warning(f"🚨 Trade rejected: {risk_result}")
             return False
+
+        # New session-based trade adjustments
+        session = self.session_detector.get_current_session()
+        self.logger.info(f"🕰️ Active Trading Session: {session}")
+
+        if session == "New York Session":
+            # Trade aggressively, use breakout strategies
+            order['stop_loss'] = order['stop_loss'] * 0.8  # Tighten stop loss
+            order['take_profit'] = order['take_profit'] * 1.2  # Increase TP
+        elif session == "Tokyo Session":
+            # Reduce trade volume, avoid momentum strategies
+            order['amount'] = order['amount'] * 0.5
+        elif session == "London Session":
+            # High volatility, increase risk-reward ratio
+            order['risk_reward'] = order.get('risk_reward', 1) * 1.5
 
         try:
             self.logger.info(f"✅ Order {order['id']} executed successfully")
