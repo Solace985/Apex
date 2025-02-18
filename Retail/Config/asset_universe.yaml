@@ -91,3 +91,15 @@ commodities:
   agricultural:
     - ZS=F # Soybeans
     - KC=F # Coffee
+
+commodity_relationships:
+  gold:
+    inversely_correlated:
+      - USD/JPY
+      - US10Y
+    directly_correlated: 
+      - GDX  # Gold miners ETF
+  crude_oil:
+    macro_links:
+      - USD/CAD
+      - XOM  # Exxon Mobil

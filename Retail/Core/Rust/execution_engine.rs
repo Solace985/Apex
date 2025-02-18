@@ -23,6 +23,16 @@ pub enum ExecutionError {
     BrokerError(#[from] Box<dyn std::error::Error>),
 }
 
+// Order State Enum
+#[derive(Clone, Copy, PartialEq)]
+pub enum OrderState {
+    Pending,
+    PartiallyFilled(f64),  // Track filled quantity
+    Filled,
+    Canceled,
+    Failed(String),
+}
+
 // Rate Limiter
 struct RateLimiter {
     semaphore: Arc<Semaphore>,
@@ -83,6 +93,7 @@ pub struct ExecutionEngine<B: BrokerAPI + Send + Sync> {
     strategy_selector: Arc<dyn StrategySelector>,
     session_detector: Arc<dyn SessionDetector>,
     market_impact_analyzer: Arc<dyn MarketImpactAnalyzer>,
+    order_states: HashMap<String, OrderState>, // Add order states tracking
 }
 
 impl<B: BrokerAPI + Send + Sync> ExecutionEngine<B> {
@@ -106,7 +117,13 @@ impl<B: BrokerAPI + Send + Sync> ExecutionEngine<B> {
             strategy_selector,
             session_detector,
             market_impact_analyzer,
+            order_states: HashMap::new(), // Initialize order states
         }
+    }
+
+    // Add to impl block
+    pub async fn update_order_state(&mut self, order_id: &str, new_state: OrderState) {
+        self.order_states.insert(order_id.to_string(), new_state);
     }
 
     // ✅ Selects the best broker dynamically (Based on execution cost & speed)

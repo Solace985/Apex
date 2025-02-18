@@ -1,16 +1,29 @@
 import numpy as np
 import pandas as pd
 
+class BacktestOrchestrator:
+    def __init__(self):
+        self.simulator = BacktestingEngine(None, None)  # Placeholder for strategy and data
+        self.evaluator = PerformanceEvaluator()
+
+    def run(self, strategy, data):
+        self.simulator = BacktestingEngine(strategy, data)
+        results = self.simulator.run_backtest()
+        return self.evaluator.calculate_metrics(results)
+
 class BacktestingEngine:
     def __init__(self, strategy, historical_data):
         self.strategy = strategy
         self.data = historical_data
 
     def run_backtest(self):
+        results = []
         for index, row in self.data.iterrows():
             signal = self.strategy.generate_signal(row)
             if signal:
                 print(f"Trade Signal at {row['timestamp']}: {signal}")
+                results.append(signal)  # Collect results for evaluation
+        return results
 
     def add_slippage(self, order):
         """

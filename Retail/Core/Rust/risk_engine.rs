@@ -1,8 +1,5 @@
-// Replace Python's slow pandas-based calculation  
-pub fn calculate_volatility(prices: &[f64]) -> f64 {  
-    let mean = prices.iter().sum::<f64>() / prices.len() as f64;  
-    let variance = prices.iter()  
-        .map(|x| (x - mean).powi(2))  
-        .sum::<f64>() / prices.len() as f64;  
-    variance.sqrt()  
+pub fn calculate_position_size(&self, symbol: &str, volatility: f64) -> f64 {
+    let params = self.asset_params.get(symbol)
+        .unwrap_or_else(|| self.default_asset_params());
+    (self.capital * params.risk_pct) / (volatility * params.leverage)
 }  

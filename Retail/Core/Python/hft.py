@@ -1,5 +1,6 @@
 import time
 import asyncio
+from core.hft_engine import RustHFTEngine
 
 class HFTTrader:
     def __init__(self, broker_api):
@@ -33,6 +34,7 @@ class HFTExecutionEngine:
 
     def __init__(self):
         self.fpga_engine = connect_to_fpga()
+        self.rust_engine = RustHFTEngine()
 
     def execute_order(self, order_details):
         """Executes an order with FPGA-based trading."""
@@ -44,3 +46,6 @@ class HFTExecutionEngine:
         """
         self.fpga_engine.send_order(order_details)
         return True
+
+    def process_order_book(self, data):
+        return self.rust_engine.handle_book(data)
