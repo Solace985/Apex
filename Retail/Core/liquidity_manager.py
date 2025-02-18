@@ -2,9 +2,11 @@ import requests
 import numpy as np
 from threading import Lock
 import time
+import asyncio
 
 class RateLimiter:
     """Prevents exceeding API call limits."""
+    
     def __init__(self, max_calls, period):
         self.max_calls = max_calls
         self.period = period
@@ -17,9 +19,9 @@ class RateLimiter:
             now = time.time()
             self.calls = [t for t in self.calls if now - t < self.period]
 
-            # 🚨 If too many API errors, reduce order rate
+            # 🚨 If too many API errors, reduce order rate dynamically
             if self.failed_order_count > 3:
-                print("⚠ Too many failed orders. Reducing request rate.")  # Replace logger with print for simplicity
+                print("⚠ Too many failed orders. Reducing request rate.")  
                 self.max_calls = max(1, self.max_calls - 1)  # 🔻 Reduce allowed orders
 
             if len(self.calls) < self.max_calls:
@@ -28,12 +30,15 @@ class RateLimiter:
             return False
 
 class LiquidityManager:
+    """Tracks real-time liquidity, detects institutional order flow, and prevents trading into illiquid conditions."""
+
     def __init__(self):
         self.order_book_data = {}
-        self.rate_limiter = RateLimiter(10, 1)  # Initialize rate limiter
+        self.rate_limiter = RateLimiter(10, 1)  # ✅ Initialize rate limiter
+        self.liquidity_threshold = 500  # ✅ Minimum liquidity needed to execute large trades
 
-    def fetch_order_book(self, exchange: str, symbol: str):
-        """Fetch real-time order book data from the exchange."""
+    async def fetch_order_book(self, exchange: str, symbol: str):
+        """Fetches real-time order book data from an exchange API."""
         if exchange == "binance":
             url = f"https://api.binance.com/api/v3/depth?symbol={symbol}&limit=100"
         elif exchange == "kraken":
@@ -42,18 +47,31 @@ class LiquidityManager:
             return None
 
         if not self.rate_limiter.allow_request():
-            print("⚠ Rate limit exceeded. Delaying request.")  # Replace logger with print for simplicity
+            print("⚠ Rate limit exceeded. Delaying request.")  
             return None
 
         response = requests.get(url)
         if response.status_code == 200:
-            data = response.json()
-            return data
+            return response.json()
         return None
 
-    def detect_whale_activity(self, exchange: str, symbol: str):
-        """Detect whale orders (large volume orders) in the order book."""
-        data = self.fetch_order_book(exchange, symbol)
+    async def get_market_liquidity(self, exchange: str, symbol: str):
+        """Analyzes market liquidity to determine whether it is safe to execute trades."""
+        data = await self.fetch_order_book(exchange, symbol)
+        if not data:
+            return 0
+
+        # Extract bid/ask sizes from order book
+        bids = np.array(data['bids'], dtype=float)
+        asks = np.array(data['asks'], dtype=float)
+
+        total_liquidity = np.sum(bids[:, 1]) + np.sum(asks[:, 1])
+
+        return total_liquidity
+
+    async def detect_whale_activity(self, exchange: str, symbol: str):
+        """Detects whale orders (large institutional orders) in the order book."""
+        data = await self.fetch_order_book(exchange, symbol)
         if not data:
             return False
 
@@ -73,23 +91,12 @@ class LiquidityManager:
 
         return whale_bid or whale_ask
 
-class OrderBookProcessor:
-    """Processes real-time order book data to track large institutional movements."""
-    
-    def __init__(self, exchange_api):
-        self.exchange_api = exchange_api
-        self.order_book = {}
+    async def adjust_trade_size_based_on_liquidity(self, trade_size, exchange, symbol):
+        """Dynamically adjusts trade size based on market liquidity to reduce slippage."""
+        market_liquidity = await self.get_market_liquidity(exchange, symbol)
 
-    async def fetch_order_book(self, symbol):
-        self.order_book = await self.exchange_api.get_order_book(symbol)
-        return self.order_book
+        if market_liquidity < self.liquidity_threshold:
+            print("⚠ Low liquidity detected! Reducing trade size.")  
+            return max(trade_size * 0.5, 1)  # Reduce trade size in illiquid conditions
 
-    def detect_whale_activity(self):
-        """Detects unusual large orders that indicate institutional trading."""
-        large_orders = [order for order in self.order_book['bids'] if order['size'] > 1000]  # Adjust threshold
-        return len(large_orders) > 5  # If more than 5 large orders, assume institutional activity
-
-# ✅ Example Usage
-liquidity_manager = LiquidityManager()
-if liquidity_manager.detect_whale_activity("binance", "BTCUSDT"):
-    print("Whale detected! Adjusting strategy...")
+        return trade_size  # ✅ Proceed with full trade size if liquidity is sufficient

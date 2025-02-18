@@ -22,6 +22,9 @@ from tenacity import retry, stop_after_attempt
 from Core.config import load_config  # Import load_config
 from session_detector import TradingSessionDetector
 from Core.strategy_selector import StrategyManager
+from AI_Models.sentiment_analysis import SentimentAnalyzer
+from Core.market_impact import MarketImpactAnalyzer
+from Core.liquidity_manager import LiquidityManager
 
 config = load_config()  # Load configuration
 
@@ -32,10 +35,10 @@ logger = get_logger("execution_engine")
 class ExecutionEngine:
     """Handles trade execution with AI, risk validation, and rate limiting."""
 
-    def __init__(self, broker_api, risk_manager, logger=None):
+    def __init__(self, broker_api, risk_manager):
         self.broker_api = broker_api
         self.risk_manager = risk_manager  # ✅ Integrated risk manager
-        self.logger = logger or logging.getLogger(__name__)
+        self.logger = logging.getLogger(__name__)
         self.rate_limiter = RateLimiter(10, 1)  # Allow max 10 orders per second
         self.failed_order_count = 0  # Track failed orders
         self.executed_orders = set()  # 🛑 Track executed order IDs
@@ -45,11 +48,15 @@ class ExecutionEngine:
         # New attributes from config
         self.trade_confirmation = config.execution.trade_confirmation_required
         self.slippage_protection = config.execution.slippage_protection
-        self.session_detector = TradingSessionDetector()  # Initialize session detector
+        self.session_detector = TradingSessionDetector()  # ✅ Initialize session detector
+        self.strategy_selector = StrategyManager()  # ✅ Initialize strategy selector
+        self.sentiment_analyzer = SentimentAnalyzer()  # ✅ Initialize sentiment analysis
+        self.market_impact_analyzer = MarketImpactAnalyzer()  # ✅ Initialize market impact analysis
+        self.liquidity_manager = LiquidityManager()  # ✅ Initialize liquidity manager
 
     @retry(stop=stop_after_attempt(3))
     async def execute_order(self, order):
-        """Executes an order only if AI confidence, risk evaluation, and rate limiting pass."""
+        """Executes an order only after checking liquidity, market impact, strategy selection, and sentiment analysis."""
 
         if not order['symbol'] in self.config['ALLOWED_SYMBOLS']:
             raise InvalidOrderError(f"Symbol {order['symbol']} not allowed")
@@ -61,19 +68,93 @@ class ExecutionEngine:
 
         # 💡 Split large orders into smaller ones
         max_order_size = 1000  # Adjust based on liquidity
-
         if order["amount"] > max_order_size:
             num_parts = order["amount"] // max_order_size
             self.logger.info(f"🔄 Splitting large order into {num_parts} smaller orders.")
-
             for _ in range(num_parts):
                 small_order = order.copy()
                 small_order["amount"] = max_order_size
                 await self.execute_order(small_order)
-
             return True  # ✅ Skip sending the original large order
 
-        # 🚨 AI Confidence Check (New Addition)
+        # ✅ 1️⃣ Check Liquidity Before Executing Trade
+        market_liquidity = await self.liquidity_manager.get_market_liquidity(order["exchange"], order["symbol"])
+        whale_activity = await self.liquidity_manager.detect_whale_activity(order["exchange"], order["symbol"])
+
+        self.logger.info(f"📊 Market Liquidity: {market_liquidity}")
+        self.logger.info(f"🐋 Whale Activity Detected: {whale_activity}")
+
+        if whale_activity:
+            self.logger.warning("🚫 Trade skipped due to large institutional orders.")
+            return False
+
+        # ✅ 2️⃣ Adjust Trade Size Based on Liquidity
+        adjusted_trade_size = await self.liquidity_manager.adjust_trade_size_based_on_liquidity(order["amount"], order["exchange"], order["symbol"])
+        order["amount"] = adjusted_trade_size
+
+        if adjusted_trade_size < 1:
+            self.logger.warning("🚫 Trade size too small after liquidity adjustment. Skipping trade.")
+            return False
+
+        self.logger.info(f"✅ Adjusted Trade Size: {adjusted_trade_size}")
+
+        # ✅ 3️⃣ Detect Trading Session
+        session = self.session_detector.get_current_session()
+        self.logger.info(f"🕰️ Active Trading Session: {session}")
+
+        # ✅ 4️⃣ Select the Best Strategy for Asset Class
+        asset_class = order.get("asset_class", "Unknown")
+        strategy = self.strategy_selector.select_strategy(asset_class)
+        indicators = self.strategy_selector.get_indicators(asset_class)
+        fundamentals = self.strategy_selector.get_fundamental_sources(asset_class)
+
+        self.logger.info(f"🔍 Selected strategy: {strategy.__class__.__name__}")
+        self.logger.info(f"📊 Using indicators: {indicators}")
+        self.logger.info(f"📑 Fundamental sources: {fundamentals}")
+
+        # ✅ 5️⃣ Perform Sentiment Analysis Before Executing Trade
+        sentiment_score = self.sentiment_analyzer.get_sentiment_score()
+        sentiment_data = self.sentiment_analyzer.integrate_sentiment_with_trading(order)
+
+        self.logger.info(f"📰 Sentiment Score: {sentiment_score}")
+        self.logger.info(f"📈 Sentiment-Based Trade Signal: {sentiment_data['sentiment_signal']}")
+
+        if sentiment_data['sentiment_signal'] == "hold":
+            self.logger.warning(f"🚫 Trade skipped due to neutral sentiment ({sentiment_score}).")
+            return False
+
+        # ✅ 6️⃣ Check Market Impact Before Executing Trade
+        market_impact = await self.market_impact_analyzer.analyze_impact(order["amount"], order["market_data"])
+        self.logger.info(f"💰 Expected Slippage: {market_impact['expected_slippage']}")
+        self.logger.info(f"📊 Market Impact Cost: {market_impact['market_impact_cost']}")
+        self.logger.info(f"⚡ Optimal Execution Schedule: {market_impact['optimal_execution_schedule']}")
+
+        if market_impact['market_impact_cost'] > 0.05:
+            self.logger.warning("🚫 Trade skipped due to high market impact cost.")
+            return False
+
+        # ✅ AI-Based Risk Assessment Before Trade Execution
+        risk_evaluation = self.risk_manager.evaluate_trade(order, order["market_data"])
+        if "REJECTED" in risk_evaluation:
+            self.logger.warning(f"🚫 Trade rejected: {risk_evaluation}")
+            return False
+
+        # ✅ 7️⃣ Dynamic Stop-Loss & Position Sizing Before Execution
+        order["stop_loss"] = self.risk_manager.dynamic_stop_loss(order["market_data"]["volatility"])
+        order["position_size"] = self.risk_manager.calculate_position_size(order["symbol"], order["strategy_type"])
+
+        self.logger.info(f"📉 Adjusted Stop-Loss: {order['stop_loss']}")
+        self.logger.info(f"📊 AI-Optimized Position Size: {order['position_size']}")
+
+        # ✅ 8️⃣ Adjust Trade Parameters Based on Session (Without Overriding AI Stop-Loss)
+        if session == "New York Session":
+            order['take_profit'] = order['take_profit'] * 1.2
+        elif session == "Tokyo Session":
+            order['amount'] = order['amount'] * 0.5
+        elif session == "London Session":
+            order['risk_reward'] = order.get('risk_reward', 1) * 1.5
+
+        # 🚨 AI Confidence Check
         if "confidence" in order and order["confidence"] < 0.6:
             self.logger.warning(f"⚠ Trade confidence too low ({order['confidence']}). Skipping execution.")
             return False
@@ -82,67 +163,32 @@ class ExecutionEngine:
         if self.failed_order_count >= self.max_failures:
             self.logger.critical("🚨 Too many failed orders. Stopping execution for 30 seconds.")
             await asyncio.sleep(self.failure_cooldown)
-            self.failed_order_count = 0  # Reset after cooldown
+            self.failed_order_count = 0
 
         # 🚨 Rate-Limiting
         if not self.rate_limiter.allow_request():
             self.logger.warning("⚠ Rate limit exceeded. Delaying execution.")
             time.sleep(1)
 
-        # If more than 3 consecutive failures, introduce a cooldown
-        if self.failed_order_count >= 3:
-            self.logger.warning("⚠ High failure rate detected. Cooling down for 5 seconds...")
-            await asyncio.sleep(5)
-            self.failed_order_count = 0  # Reset count
-
         # 📊 Adaptive Retry Delay
-        market_volatility = self.get_market_volatility()  # 🔍 Get market conditions
-
-        if market_volatility > 0.8:
-            retry_delay = 1  # 🚀 Retry fast in high volatility
-        elif market_volatility > 0.5:
-            retry_delay = 3  # Moderate retry speed
-        else:
-            retry_delay = 5  # 🐢 Slow retry in stable market
-
+        market_volatility = self.get_market_volatility()
+        retry_delay = 1 if market_volatility > 0.8 else 3 if market_volatility > 0.5 else 5
         self.logger.warning(f"⚠ Market volatility: {market_volatility}. Retrying in {retry_delay} seconds.")
         await asyncio.sleep(retry_delay)
 
-        # Risk evaluation
-        risk_result = self.risk_manager.evaluate_trade(order, market_data)
-
-        if "REJECTED" in risk_result:
-            self.logger.warning(f"🚨 Trade rejected: {risk_result}")
-            return False
-
-        # New session-based trade adjustments
-        session = self.session_detector.get_current_session()
-        self.logger.info(f"🕰️ Active Trading Session: {session}")
-
-        if session == "New York Session":
-            # Trade aggressively, use breakout strategies
-            order['stop_loss'] = order['stop_loss'] * 0.8  # Tighten stop loss
-            order['take_profit'] = order['take_profit'] * 1.2  # Increase TP
-        elif session == "Tokyo Session":
-            # Reduce trade volume, avoid momentum strategies
-            order['amount'] = order['amount'] * 0.5
-        elif session == "London Session":
-            # High volatility, increase risk-reward ratio
-            order['risk_reward'] = order.get('risk_reward', 1) * 1.5
-
+        # ✅ 9️⃣ Proceed with Trade Execution
         try:
-            self.logger.info(f"✅ Order {order['id']} executed successfully")
-            self.failed_order_count = 0  # Reset failure count on success
-            self.executed_orders.add(order["id"])  # Mark order as executed
-            
+            self.logger.info(f"✅ Executing Order {order['id']}")
+            self.failed_order_count = 0
+            self.executed_orders.add(order["id"])
             return self.broker_api.place_order(
                 symbol=order['symbol'],
                 qty=order['amount'],
                 order_type="LIMIT",
-                price=order['price'] * 1.001  # Avoid slippage
+                price=order['price']
             )
         except Exception as e:
-            self.failed_order_count += 1  # Increment failure count
+            self.failed_order_count += 1
             self.logger.error(f"❌ Trade execution failed: {e}")
             return None
 
