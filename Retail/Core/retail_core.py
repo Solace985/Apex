@@ -39,7 +39,7 @@ from AI_Models.technical_analysis import TechnicalAnalysis
 from AI_Models.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
 from Retail.Core.risk_management import AdaptiveRiskManagement
 import time
-from Retail.Core.data_feed import DataFeed
+from Retail.Data.data_feed import DataFeed
 from Retail.Core.trading_ai import TradingAI
 from Retail.Core.risk_management import RiskManager
 from Retail.Core.execution_engine import ExecutionEngine
