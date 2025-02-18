@@ -21,7 +21,7 @@ from pydantic import BaseModel
 import aiosqlite
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
-from AI_Models.maddpg_model import MADDPG
+from Retail.AI_Models.Reinforcement.maddpg_model import MADDPG
 import numpy as np
 from Retail.utils.logger import setup_logger
 from Retail.utils.data_feed import DataFeed as UtilsDataFeed
@@ -29,19 +29,19 @@ from Retail.utils.strategy_manager import StrategyManager
 from Retail.utils.risk_manager import RiskManager as UtilsRiskManager
 from Retail.AI_Models.machine_learning import MachineLearningModel
 from joblib import Parallel, delayed
-from Retail.Core.liquidity_manager import LiquidityManager
+from Retail.Core.Python.liquidity_manager import LiquidityManager
 import requests
 from textblob import TextBlob
 from AI_Models.fundamental_analysis import FundamentalAnalysis
 from AI_Models.sentiment_analysis import SentimentAnalyzer
-from Core.liquidity_manager import LiquidityManager as AIModulesLiquidityManager
+from Retail.Core.Python.liquidity_manager import LiquidityManager as AIModulesLiquidityManager
 from AI_Models.technical_analysis import TechnicalAnalysis
-from AI_Models.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
-from Retail.Core.risk_management import AdaptiveRiskManagement
+from Retail.AI_Models.Reinforcement.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
+from Retail.Core.Python.risk_management import AdaptiveRiskManagement
 import time
 from Retail.Data.data_feed import DataFeed
-from Retail.Core.trading_ai import TradingAI
-from Retail.Core.risk_management import RiskManager
+from Retail.Core.Python.trading_ai import TradingAI
+from Retail.Core.Python.risk_management import RiskManager
 from Retail.Core.execution_engine import ExecutionEngine
 from Retail.Metrics.performance_metrics import PerformanceTracker
 from Retail.Brokers.broker_factory import BrokerFactory

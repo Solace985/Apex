@@ -1,7 +1,7 @@
 import logging
 import json
 from Brokers.broker_factory import BrokerFactory
-from Core.config import load_config
+from Retail.Core.Python.config import load_config
 
 # Load configuration at startup
 config = load_config()

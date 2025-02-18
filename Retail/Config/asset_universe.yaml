@@ -1,0 +1,93 @@
+indices:
+  nifty50:
+    components:
+      - RELIANCE
+      - HDFCBANK
+      - INFOSYS
+      - TCS
+      - HINDUNILVR
+      - KOTAKBANK
+      - ICICIBANK
+      - LT
+      - SBIN
+      - AXISBANK
+      - MARUTI
+      - BAJFINANCE
+      - BHARTIARTL
+      - ASIANPAINT
+      - HCLTECH
+      - M&M
+      - SUNPHARMA
+      - TITAN
+      - ULTRACEMCO
+      - NESTLEIND
+      - ONGC
+      - IOC
+      - SHREECEM
+      - JSWSTEEL
+      - TATASTEEL
+      - CIPLA
+      - GRASIM
+      - BAJAJFINSV
+      - DRREDDY
+      - HDFCLIFE
+      - DIVISLAB
+      - SBILIFE
+      - UPL
+      - BAJAJ-AUTO
+      - POWERGRID
+      - NTPC
+      - ADANIPORTS
+      - COALINDIA
+      - BRITANNIA
+      - EICHERMOT
+      - HEROMOTOCO
+      - INDUSINDBK
+      - TATACONSUM
+      - APOLLOHOSP
+      - BPCL
+      - WIPRO
+      - HINDALCO
+      - TECHM
+
+forex:
+  major_pairs:
+    - EUR/USD
+    - USD/JPY
+    - GBP/USD
+    - USD/CHF
+    - AUD/USD
+    - USD/CAD
+    - NZD/USD
+    - EUR/GBP
+    - EUR/JPY
+    - GBP/JPY
+
+global_stocks:
+  us:
+    - AAPL
+    - TSLA
+    - AMZN
+    - GOOGL
+    - META
+    - MSFT
+    - NVDA
+  europe:
+    - SAP.DE
+    - ASML.AS
+    - LVMH.PA
+  asia:
+    - 9988.HK # Alibaba
+    - 700.HK  # Tencent
+
+commodities:
+  energy:
+    - CL=F # Crude Oil
+    - NG=F # Natural Gas
+  metals:
+    - GC=F # Gold
+    - SI=F # Silver
+    - PL=F # Platinum
+  agricultural:
+    - ZS=F # Soybeans
+    - KC=F # Coffee

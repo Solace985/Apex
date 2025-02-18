@@ -64,3 +64,27 @@ notifications:
   telegram_alerts: true
   telegram_api_key: "your_telegram_api_key"
   telegram_chat_id: "your_telegram_chat_id"
+
+# 🔹 Strategies Configuration
+strategies:
+  Stocks: "mean_reversion"
+  Forex: "momentum_breakout"
+  Crypto: "volatility_scalping"
+  Commodities: "fundamental_trend_following"
+  Indices: "macroeconomic_trend"
+
+# 🔹 Technical indicators per asset type
+indicators:
+  Stocks: ["RSI", "MACD", "BollingerBands"]
+  Forex: ["MovingAverages", "FibonacciRetracements"]
+  Crypto: ["VWAP", "OrderFlowAnalysis"]
+  Commodities: ["SupplyDemandAnalysis", "Seasonality"]
+  Indices: ["VolatilityIndex", "GDPCorrelation"]
+
+# 🔹 Fundamental analysis sources per asset type
+fundamental_sources:
+  Stocks: ["EarningsReports", "SECFilings"]
+  Forex: ["InterestRates", "GDPReports"]
+  Crypto: ["OnChainAnalysis", "MarketSentiment"]
+  Commodities: ["OilProductionData", "WeatherReports"]
+  Indices: ["BondYields", "CPIReports"]

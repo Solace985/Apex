@@ -5,7 +5,7 @@ import websockets
 from typing import Dict, Any
 from polygon import WebSocketClient
 from AI_Models.order_flow import InstitutionalOrderFlow
-from Retail.Core.config import load_config
+from Retail.Core.Python.config import load_config
 import aiohttp
 import json
 import optuna

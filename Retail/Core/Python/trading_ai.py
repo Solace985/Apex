@@ -1,11 +1,11 @@
-from Retail.Core.config import load_config
+from Retail.Core.Python.config import load_config
 
 config = load_config()
 
-from Retail.AI_Models.lstm_model import LSTMModel
+from Retail.AI_Models.Timeseries.lstm_model import LSTMModel
 from Retail.AI_Models.technical_analysis import TechnicalAnalysis
 from Retail.AI_Models.sentiment_analysis import SentimentAnalyzer
-from Retail.AI_Models.maddpg_model import MADDPG
+from Retail.AI_Models.Reinforcement.maddpg_model import MADDPG
 
 class TradingAI:
     """AI-driven trade signal generation using LSTM, Technical, Sentiment, and ML analysis."""

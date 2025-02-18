@@ -6,6 +6,7 @@ import numpy as np
 from textblob import TextBlob
 from nltk.sentiment import SentimentIntensityAnalyzer
 from typing import Dict, Any
+from transformers import pipeline
 
 nltk.download('vader_lexicon')
 
@@ -14,6 +15,7 @@ class SentimentAnalyzer:
 
     def __init__(self):
         self.sia = SentimentIntensityAnalyzer()
+        self.nlp = pipeline("text-classification", model="ProsusAI/finbert")
 
     def fetch_news_sentiment(self):
         """Fetches financial news sentiment from API sources and assigns sentiment scores."""
