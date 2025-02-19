@@ -122,6 +122,10 @@ fn main() {
     if let Err(err) = loader.load_from_json("assets.json") {
         eprintln!("⚠️ Error loading JSON: {}", err);
     }
+    // Example: Load assets from SQLite database
+    if let Err(err) = loader.load_from_db("assets.db") {
+        eprintln!("⚠️ Error loading database: {}", err);
+    }
 
     // Fetch and print an asset
     if let Some(asset) = loader.get_asset("AAPL") {
