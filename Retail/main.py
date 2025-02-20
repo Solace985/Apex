@@ -2,6 +2,7 @@ import logging
 import json
 from Brokers.broker_factory import BrokerFactory
 from Retail.Core.Python.config import load_config
+from AI_Models.deep_learning_wrapper import predict_lstm  # Importing the LSTM prediction function
 
 # Load configuration at startup
 config = load_config()
@@ -42,6 +43,13 @@ def main():
         json.dump(api_keys, file)
     
     print(f"✅ API Integration Complete! Trading will now begin on {selected_broker}")
+
+    # Example data (30 timesteps, 8 features)
+    example_input = [[0.1] * 8] * 30
+
+    # Call the C++ model
+    prediction = predict_lstm(example_input)
+    print("Predicted Action (Buy, Hold, Sell):", prediction)
 
 if __name__ == "__main__":
     main()
