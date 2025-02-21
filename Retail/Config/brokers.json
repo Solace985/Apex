@@ -1,0 +1,29 @@
+{
+    "binance": {
+        "base_url": "https://api.binance.com",
+        "auth_type": "oauth",
+        "oauth_url": "https://accounts.binance.com/oauth",
+        "endpoints": {
+            "place_order": "/api/v3/order",
+            "get_balance": "/api/v3/account"
+        }
+    },
+    "zerodha": {
+        "base_url": "https://api.kite.trade",
+        "auth_type": "oauth",
+        "oauth_url": "https://kite.zerodha.com/connect/login",
+        "endpoints": {
+            "place_order": "/orders/regular",
+            "get_balance": "/user/profile"
+        }
+    },
+    "upstox": {
+        "base_url": "https://api.upstox.com/v2",
+        "auth_type": "oauth",
+        "oauth_url": "https://login.upstox.com",
+        "endpoints": {
+            "place_order": "/order/place",
+            "get_balance": "/funds"
+        }
+    }
+}
