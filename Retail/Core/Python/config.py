@@ -1,99 +1,175 @@
 import yaml
 import os
-from pydantic import BaseModel
-from typing import List, Dict
+import json
+import logging
+import threading
+import keyring
+from dotenv import load_dotenv
+from cryptography.fernet import Fernet
+from pydantic import BaseModel, Field, ValidationError
+from typing import List, Dict, Optional
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
-# 🔹 Define Config Classes
+
+# Load environment variables
+load_dotenv()
+# Fetch encryption key securely and store in memory
+CACHED_SECRET_KEY = keyring.get_password("ApexBot", "CONFIG_SECRET_KEY")
+if not CACHED_SECRET_KEY:
+    CACHED_SECRET_KEY = Fernet.generate_key().decode()
+    keyring.set_password("ApexBot", "CONFIG_SECRET_KEY", CACHED_SECRET_KEY)
+
+cipher = Fernet(CACHED_SECRET_KEY.encode())
+
+def encrypt_api_key(api_key: str) -> str:
+    return cipher.encrypt(api_key.encode()).decode()
+
+def decrypt_api_key(encrypted_key: str) -> str:
+    return cipher.decrypt(encrypted_key.encode()).decode()
+
+# 🔹 Logging Setup
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+# 🔹 Define Config Classes with Defaults
 class ExecutionConfig(BaseModel):
-    slippage_tolerance: float
-    latency_budget_ms: int
-    retry_attempts: int
+    slippage_tolerance: float = 0.01
+    latency_budget_ms: int = 50
+    retry_attempts: int = 3
 
 class RiskConfig(BaseModel):
-    max_drawdown: float
-    daily_loss_limit: float
-    volatility_threshold: float
-    risk_threshold: float
-    stop_loss: float
-    take_profit: float
-    position_sizing_strategy: str
+    max_drawdown: float = 0.1
+    daily_loss_limit: float = 0.05
+    volatility_threshold: float = 0.2
+    risk_threshold: float = 0.15
+    stop_loss: float = 0.02
+    take_profit: float = 0.05
+    position_sizing_strategy: str = "Kelly Criterion"
 
 class AIConfig(BaseModel):
-    enable_live_adaptation: bool
-    strategy_selection: str
-    model_path: str
+    enable_live_adaptation: bool = True
+    strategy_selection: str = "dynamic"
+    model_path: str = "models/best_model.pkl"
 
 class BacktestingConfig(BaseModel):
-    use_backtest: bool
-    historical_data_path: str
-    start_date: str
-    end_date: str
-    capital: float
-    commission: float
+    use_backtest: bool = False
+    historical_data_path: str = "data/historical.csv"
+    start_date: str = "2023-01-01"
+    end_date: str = "2024-01-01"
+    capital: float = 100000.0
+    commission: float = 0.001
 
 class WebsocketConfig(BaseModel):
-    enable_real_time_data: bool
-    polygon_key: str
-    symbols: List[str]
+    enable_real_time_data: bool = True
+    polygon_key: Optional[str] = Field(default=None, description="Encrypted API Key")
+    symbols: List[str] = ["AAPL", "TSLA", "BTC/USD"]
+
+    def get_polygon_key(self, use_decrypted=False) -> str:
+        """ Only decrypt API key when explicitly requested. """
+        if use_decrypted:
+            return decrypt_api_key(self.polygon_key) if self.polygon_key else None
+        return self.polygon_key  # Return encrypted by default
 
 class LoggingConfig(BaseModel):
-    level: str
-    log_to_file: bool
-    log_file_path: str
+    level: str = "INFO"
+    log_to_file: bool = True
+    log_file_path: str = "logs/trading.log"
 
 class DatabaseConfig(BaseModel):
-    path: str
-    backup_frequency: str
-    log_trades: bool
+    path: str = "db/trading.db"
+    backup_frequency: str = "daily"
+    log_trades: bool = True
 
 class NotificationConfig(BaseModel):
-    enable_alerts: bool
-    email_alerts: bool
-    telegram_alerts: bool
-    telegram_api_key: str
-    telegram_chat_id: str
+    enable_alerts: bool = True
+    email_alerts: bool = False
+    telegram_alerts: bool = True
+    telegram_api_key: Optional[str] = Field(default=None, description="Encrypted API Key")
+    telegram_chat_id: str = ""
+
+    def get_telegram_key(self, use_decrypted=False) -> str:
+        """ Only decrypt API key when explicitly requested. """
+        if use_decrypted:
+            return decrypt_api_key(self.telegram_api_key) if self.telegram_api_key else None
+        return self.telegram_api_key  # Return encrypted by default
 
 class StrategyConfig(BaseModel):
-    enabled: List[str]
+    enabled: List[str] = ["TrendFollowing", "MeanReversion"]
 
 class TradingModeConfig(BaseModel):
-    live_trading: bool
-    testnet: bool
+    live_trading: bool = False
+    testnet: bool = True
 
 class RetailConfig(BaseModel):
-    mode: str
-    execution: ExecutionConfig
-    risk: RiskConfig
-    ai_trading: AIConfig
-    backtesting: BacktestingConfig
-    websocket: WebsocketConfig
-    logging: LoggingConfig
-    database: DatabaseConfig
-    notifications: NotificationConfig
-    strategies: StrategyConfig
-    trading_mode: TradingModeConfig
+    mode: str = "paper"
+    execution: ExecutionConfig = ExecutionConfig()
+    risk: RiskConfig = RiskConfig()
+    ai_trading: AIConfig = AIConfig()
+    backtesting: BacktestingConfig = BacktestingConfig()
+    websocket: WebsocketConfig = WebsocketConfig()
+    logging: LoggingConfig = LoggingConfig()
+    database: DatabaseConfig = DatabaseConfig()
+    notifications: NotificationConfig = NotificationConfig()
+    strategies: StrategyConfig = StrategyConfig()
+    trading_mode: TradingModeConfig = TradingModeConfig()
 
-# 🔹 Load Configuration Function
+    class Config:
+        extra = "ignore"  # Ignores unknown fields instead of crashing
+
+# 🔹 Load Configuration Function with Live Reloading
 def load_config():
-    """Loads settings from both config.yaml & settings.yaml and merges them."""
+    """Loads and validates settings from config.yaml and settings.yaml, with encryption support."""
     config_path = "Retail/Config/config.yaml"
     settings_path = "Retail/Config/settings.yaml"
-    
+
     try:
         with open(config_path, "r") as f:
-            config_data = yaml.safe_load(f)
+            config_data = yaml.safe_load(f) or {}
+
         with open(settings_path, "r") as f:
-            settings_data = yaml.safe_load(f)
-        
+            settings_data = yaml.safe_load(f) or {}
+
         # Merge settings.yaml into config.yaml
         merged_config = {**config_data, **settings_data}
-        return RetailConfig(**merged_config)
-    except FileNotFoundError as e:
-        raise Exception(f"❌ Configuration file missing: {e}")
-    except yaml.YAMLError as e:
-        raise Exception(f"❌ YAML Parsing Error: {e}")
 
-# Example Usage
+        return RetailConfig(**merged_config)
+
+    except FileNotFoundError as e:
+        logger.error(f"❌ Configuration file missing: {e}")
+        return None
+    except yaml.YAMLError as e:
+        logger.error(f"❌ YAML Parsing Error: {e}")
+        return None
+    except ValidationError as e:
+        logger.error(f"❌ Configuration Validation Error: {e}")
+        return None
+
+# 🔹 Live Configuration Reloading (Uses Watchdog)
+class ConfigFileChangeHandler(FileSystemEventHandler):
+    def on_modified(self, event):
+        if event.src_path in ["Retail/Config/config.yaml", "Retail/Config/settings.yaml"]:
+            logger.info("🔄 Config file updated. Reloading...")
+            load_config()
+
+def watch_config():
+    """ Monitors config.yaml for changes and reloads automatically. """
+    event_handler = ConfigFileChangeHandler()
+    observer = Observer()
+    observer.schedule(event_handler, path="Retail/Config", recursive=False)
+    observer.start()
+
+    def stop_observer():
+        observer.stop()
+        observer.join()
+    
+    threading.Thread(target=stop_observer, daemon=True).start()
+
+
+# Start watching for config changes in the background
+watch_config()
+
+# Load initial config
 config = load_config()
-print(f"Trading Mode: {config.mode}")  # Prints: "testing" or "live"
-print(f"Enabled Strategies: {config.strategies.enabled}")  # Prints: ['TrendFollowing', 'MeanReversion']
+logger.info(f"✅ Trading Mode: {config.mode}")
+logger.info(f"✅ Enabled Strategies: {config.strategies.enabled}")

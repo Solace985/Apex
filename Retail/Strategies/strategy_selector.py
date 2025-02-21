@@ -2,10 +2,10 @@ import yaml
 import numpy as np
 from typing import Dict, Any
 from abc import ABC, abstractmethod
-from ai_models.maddpg_model import ReinforcementLearningStrategy
-from ai_models.lstm_model import LSTMPricePredictor
-from core.risk_management import RiskManager
-from core.market_impact import MarketImpactAnalyzer
+from Retail.AI_Models.Reinforcement.maddpg_model import ReinforcementLearningStrategy
+from Retail.AI_Models.Timeseries.lstm_model import LSTMPricePredictor
+from Retail.Core.Python.risk_management import RiskManager
+from Retail.Core.Python.market_impact import MarketImpactAnalyzer
 
 # Load strategy configuration
 def load_strategy_config():
