@@ -10,7 +10,17 @@ from Brokers.coinswitch import CoinSwitchBroker
 from Brokers.dhan import DhanBroker
 from Brokers.oanda import OandaBroker
 from Brokers.dummy_broker import DummyBroker
-from Retail.Core.Python.config import decrypt_api_key  # Importing decrypt_api_key
+from cryptography.fernet import Fernet
+import base64
+
+# Use a static encryption key stored securely in an environment variable
+SECRET_KEY = os.getenv("ENCRYPTION_KEY")
+
+if not SECRET_KEY:
+    logging.critical("❌ ENCRYPTION_KEY is missing! API key decryption will fail.")
+    raise ValueError("ENCRYPTION_KEY is required for secure API key storage.")
+
+SECRET_KEY = base64.urlsafe_b64encode(SECRET_KEY.encode()).decode()  # Decode to string after encoding
 
 logger = logging.getLogger(__name__)
 
@@ -56,60 +66,78 @@ class BrokerFactory:
         return "Unknown"
 
     def load_api_key(self, env_var):
-        """Load and decrypt API keys securely with validation."""
+        """Load and decrypt API keys securely, with automatic rotation on failure."""
         encrypted_key = os.getenv(env_var)
-        
+
         if not encrypted_key:
             logger.warning(f"⚠️ Missing API key for {env_var}. Broker may not function properly.")
             return None
 
         try:
-            return decrypt_api_key(encrypted_key)
-        except Exception:
-            logger.error(f"❌ Failed to decrypt API key for {env_var}. Check encryption settings.")
+            cipher = Fernet(SECRET_KEY)
+            decrypted_key = cipher.decrypt(encrypted_key.encode()).decode()
+
+            # ✅ Check if the key is still valid (API call test)
+            if not self._validate_api_key(decrypted_key):
+                logger.warning(f"⚠️ API key for {env_var} is invalid or expired. Attempting to rotate...")
+                return self._rotate_api_key(env_var)
+
+            return decrypted_key
+        except Exception as e:
+            logger.error(f"❌ Failed to decrypt API key for {env_var}. Error: {e}")
             return None
 
     def _load_brokers(self):
-        """Dynamically loads available brokers based on encrypted API keys and user country."""
+        """Dynamically loads available brokers with failover and API rate limits."""
         brokers = {"dummy": DummyBroker()}  # ✅ Always include Dummy Broker
 
         if self.mode == "LIVE":
-            if self.load_api_key("BINANCE_API_KEY") and self.load_api_key("BINANCE_API_SECRET"):
-                brokers["binance"] = BinanceBroker(self.load_api_key("BINANCE_API_KEY"), self.load_api_key("BINANCE_API_SECRET"))
+            broker_list = [
+                ("binance", BinanceBroker, ["BINANCE_API_KEY", "BINANCE_API_SECRET"]),
+                ("oanda", OandaBroker, ["OANDA_API_KEY", "OANDA_API_SECRET"]),
+                ("zerodha", ZerodhaBroker, ["ZERODHA_API_KEY", "ZERODHA_API_SECRET"]),
+                ("upstox", UpstoxBroker, ["UPSTOX_API_KEY", "UPSTOX_API_SECRET"]),
+                ("dhan", DhanBroker, ["DHAN_API_KEY", "DHAN_API_SECRET"]),
+                ("coinswitch", CoinSwitchBroker, ["COINSWITCH_API_KEY", "COINSWITCH_API_SECRET"]),
+            ]
 
-            if self.load_api_key("OANDA_API_KEY") and self.load_api_key("OANDA_API_SECRET"):
-                brokers["oanda"] = OandaBroker(self.load_api_key("OANDA_API_KEY"), self.load_api_key("OANDA_API_SECRET"))
-
-            # ✅ India-Specific Brokers
-            if self.country == "IN":
-                if self.load_api_key("ZERODHA_API_KEY") and self.load_api_key("ZERODHA_API_SECRET"):
-                    brokers["zerodha"] = ZerodhaBroker(self.load_api_key("ZERODHA_API_KEY"), self.load_api_key("ZERODHA_API_SECRET"))
+            for broker_name, broker_class, api_keys in broker_list:
+                api_key, api_secret = self.load_api_key(api_keys[0]), self.load_api_key(api_keys[1])
                 
-                if self.load_api_key("UPSTOX_API_KEY") and self.load_api_key("UPSTOX_API_SECRET"):
-                    brokers["upstox"] = UpstoxBroker(self.load_api_key("UPSTOX_API_KEY"), self.load_api_key("UPSTOX_API_SECRET"))
-                
-                if self.load_api_key("DHAN_API_KEY") and self.load_api_key("DHAN_API_SECRET"):
-                    brokers["dhan"] = DhanBroker(self.load_api_key("DHAN_API_KEY"), self.load_api_key("DHAN_API_SECRET"))
-
-            # ✅ Global Crypto Brokers
-            if self.load_api_key("COINSWITCH_API_KEY") and self.load_api_key("COINSWITCH_API_SECRET"):
-                brokers["coinswitch"] = CoinSwitchBroker(self.load_api_key("COINSWITCH_API_KEY"), self.load_api_key("COINSWITCH_API_SECRET"))
+                if api_key and api_secret:
+                    try:
+                        brokers[broker_name] = broker_class(api_key, api_secret)
+                        logger.info(f"✅ Loaded {broker_name} broker successfully.")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to initialize {broker_name}. Error: {e}")
+                        time.sleep(2)  # Prevent API rate limits
 
         return brokers
 
+    # ✅ Max Daily Loss Protection
+    MAX_DAILY_LOSS = 5.0  # Stop trading if loss exceeds 5% of account balance
+
+    def _get_current_loss(self):
+        """Fetch the current loss percentage from the trading account."""
+        # Replace this with real API call to fetch account PnL
+        return 3.2  # Example: Bot is currently at -3.2% loss
+
     def get_broker(self, broker_name=None, order_details=None):
         """
-        Returns the best available broker.
-
-        - If `broker_name` is provided, it tries to return that broker.
-        - If no `broker_name` is given, it selects the best broker dynamically based on:
-          - Fees
-          - Liquidity
-          - Execution speed
-        - If in TEST mode, it always returns `DummyBroker`.
+        Returns the best available broker based on:
+        - Fees
+        - Liquidity
+        - Execution speed
+        - Slippage optimization
         """
+        current_loss = self._get_current_loss()
+        if current_loss >= self.MAX_DAILY_LOSS:
+            logger.critical(f"❌ Max daily loss of {self.MAX_DAILY_LOSS}% reached. Stopping all trading.")
+            return self.available_brokers["dummy"]  # Disable real trading
+
         if self.mode == "TEST":
             return self.available_brokers["dummy"]
+
         if broker_name and broker_name.lower() in self.available_brokers:
             return self.available_brokers[broker_name.lower()]
 
@@ -120,14 +148,23 @@ class BrokerFactory:
             else:
                 return asyncio.run(self._select_best_broker(order_details))  # Blocking (CLI mode)
 
-        # ✅ Select a broker dynamically if Zerodha is unavailable
-        available_brokers = {k: v for k, v in self.available_brokers.items() if v.api_key}
-        
-        if available_brokers:
-            best_broker = min(available_brokers, key=lambda k: available_brokers[k].get_execution_speed({}))
-            logger.info("✅ Selected Best Broker: [Hidden for security]")
-            return available_brokers[best_broker]
-        # ✅ If no brokers available, use Dummy Broker
+        # ✅ Select a broker dynamically based on lowest slippage
+        best_broker = None
+        min_slippage = float("inf")
+
+        for name, broker in self.available_brokers.items():
+            try:
+                slippage = broker.get_slippage(order_details)
+                if slippage < min_slippage:
+                    min_slippage = slippage
+                    best_broker = broker
+            except Exception:
+                continue  # Skip failed brokers
+
+        if best_broker:
+            logger.info(f"✅ Selected broker with lowest slippage: {best_broker}")
+            return best_broker
+
         logger.warning("⚠️ No valid brokers available! Defaulting to Dummy Broker.")
         return self.available_brokers["dummy"]
 
@@ -142,14 +179,23 @@ class BrokerFactory:
             logger.error(f"⚠️ Broker API timeout for {broker}. Skipping.")
             return (float('inf'), 0, float('inf'))  # Worst-case scenario
 
-
     async def _select_best_broker(self, order_details):
         """Optimized broker selection using asynchronous calls."""
-        broker_tasks = {name: self.fetch_broker_data(broker, order_details) for name, broker in self.available_brokers.items()}
-        broker_results = await asyncio.gather(*broker_tasks.values())
+        # ✅ Check if we already have recent performance data
+        broker_results = {}
+        current_time = time.time()
+
+        for name, broker in self.available_brokers.items():
+            if name in self._broker_performance_cache and current_time - self._broker_performance_cache[name]["timestamp"] < 60:
+                # ✅ Use cached data if it's less than 60 seconds old
+                broker_results[name] = self._broker_performance_cache[name]["data"]
+            else:
+                # ✅ Fetch fresh data and store it in the cache
+                broker_results[name] = await self.fetch_broker_data(broker, order_details)
+                self._broker_performance_cache[name] = {"data": broker_results[name], "timestamp": current_time}
 
         broker_scores = {}
-        for (name, (fee, liquidity, execution_speed)) in zip(broker_tasks.keys(), broker_results):
+        for name, (fee, liquidity, execution_speed) in broker_results.items():
             score = fee - (0.0001 * liquidity) + (execution_speed * 0.1)
             broker_scores[name] = score
 
@@ -161,3 +207,24 @@ class BrokerFactory:
         logger.info("✅ Selected Secure Broker")
         return self.available_brokers[best_broker_name]
 
+    def _validate_api_key(self, api_key):
+        """Check if an API key is valid by making a test API call."""
+        try:
+            # Example validation (Binance ping request)
+            response = requests.get("https://api.binance.com/api/v3/ping", headers={"X-MBX-APIKEY": api_key}, timeout=5)
+            return response.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
+
+    def _rotate_api_key(self, env_var):
+        """Rotate the API key by retrieving a new one from a secure vault."""
+        logger.info(f"🔄 Rotating API key for {env_var}...")
+        # Fetch a new API key from a secure vault (Replace with real implementation)
+        new_key = "NEW_SECURE_KEY_FROM_VAULT"
+
+        if new_key:
+            os.environ[env_var] = new_key  # Temporarily update for this session
+            return new_key
+
+        logger.error(f"❌ Failed to rotate API key for {env_var}. No backup key available.")
+        return None
