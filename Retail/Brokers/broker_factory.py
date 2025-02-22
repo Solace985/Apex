@@ -3,15 +3,14 @@ import logging
 import time
 import requests  # Required for IP-based country detection
 import asyncio  # Added for asynchronous operations
-from Brokers.zerodha import ZerodhaBroker
-from Brokers.binance import BinanceBroker
-from Brokers.upstox import UpstoxBroker
-from Brokers.coinswitch import CoinSwitchBroker
-from Brokers.dhan import DhanBroker
-from Brokers.oanda import OandaBroker
+from Brokers.universal_broker import UniversalBroker
+from Brokers.broker_manager import BrokerManager  # Required for dynamic broker configuration
 from Brokers.dummy_broker import DummyBroker
 from cryptography.fernet import Fernet
+from ratelimit import limits, sleep_and_retry
 import base64
+from tenacity import retry, stop_after_attempt, wait_fixed
+from functools import lru_cache  # Added for caching
 
 # Use a static encryption key stored securely in an environment variable
 SECRET_KEY = os.getenv("ENCRYPTION_KEY")
@@ -42,28 +41,31 @@ class BrokerFactory:
         else:
             logger.info(f"✅ Trading in LIVE mode: Selecting best available broker for country: {self.country}")
 
+    @sleep_and_retry
+    @limits(calls=5, period=10)  # Limit to 5 calls per 10 seconds
     def _detect_user_country(self):
-        """Detects the user's country using multiple geolocation APIs with validation."""
+        """Detects user's country using multiple APIs with rate limiting."""
         geo_services = [
             "https://ipinfo.io/json",
             "https://ipapi.co/json",
             "https://geolocation-db.com/json/"
         ]
-
         for service in geo_services:
             try:
                 response = requests.get(service, timeout=5)
                 if response.status_code == 200:
                     data = response.json()
-                    if isinstance(data, dict) and "country" in data and isinstance(data["country"], str):
-                        country = data["country"].strip()
-                        if country:
-                            return country
+                    if "country" in data:
+                        return data["country"]
             except requests.exceptions.RequestException as e:
-                logger.error(f"⚠️ Country detection API failed: {service} - {e}")
+                logger.error(f"⚠️ Country detection failed: {service} - {e}")
         
-        logger.error("⚠️ Could not determine user's country after multiple attempts. Defaulting to 'Unknown'.")
+        logger.warning("⚠️ Unable to determine country. Defaulting to 'Unknown'.")
         return "Unknown"
+
+    @lru_cache(maxsize=10)  # Store the 10 most recent broker performance results
+    def _get_cached_broker_performance(self, broker_name):
+        return self._broker_performance_cache.get(broker_name, {})
 
     def load_api_key(self, env_var):
         """Load and decrypt API keys securely, with automatic rotation on failure."""
@@ -88,29 +90,24 @@ class BrokerFactory:
             return None
 
     def _load_brokers(self):
-        """Dynamically loads available brokers with failover and API rate limits."""
-        brokers = {"dummy": DummyBroker()}  # ✅ Always include Dummy Broker
+        """Dynamically loads brokers using UniversalBroker."""
+        brokers = {}
 
-        if self.mode == "LIVE":
-            broker_list = [
-                ("binance", BinanceBroker, ["BINANCE_API_KEY", "BINANCE_API_SECRET"]),
-                ("oanda", OandaBroker, ["OANDA_API_KEY", "OANDA_API_SECRET"]),
-                ("zerodha", ZerodhaBroker, ["ZERODHA_API_KEY", "ZERODHA_API_SECRET"]),
-                ("upstox", UpstoxBroker, ["UPSTOX_API_KEY", "UPSTOX_API_SECRET"]),
-                ("dhan", DhanBroker, ["DHAN_API_KEY", "DHAN_API_SECRET"]),
-                ("coinswitch", CoinSwitchBroker, ["COINSWITCH_API_KEY", "COINSWITCH_API_SECRET"]),
-            ]
+        try:
+            # Load user-specific broker configurations from broker manager
+            manager = BrokerManager()
+            available_brokers = manager.get_all_brokers()
 
-            for broker_name, broker_class, api_keys in broker_list:
-                api_key, api_secret = self.load_api_key(api_keys[0]), self.load_api_key(api_keys[1])
-                
-                if api_key and api_secret:
-                    try:
-                        brokers[broker_name] = broker_class(api_key, api_secret)
-                        logger.info(f"✅ Loaded {broker_name} broker successfully.")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Failed to initialize {broker_name}. Error: {e}")
-                        time.sleep(2)  # Prevent API rate limits
+            for broker_name in available_brokers:
+                try:
+                    brokers[broker_name] = UniversalBroker(user_id="default_user")  # Replace with actual user ID logic
+                    logger.info(f"✅ Loaded {broker_name} via UniversalBroker.")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to initialize {broker_name}. Error: {e}")
+                    time.sleep(2)
+
+        except Exception as e:
+            logger.error(f"❌ Broker loading failed: {e}")
 
         return brokers
 
@@ -122,51 +119,65 @@ class BrokerFactory:
         # Replace this with real API call to fetch account PnL
         return 3.2  # Example: Bot is currently at -3.2% loss
 
-    def get_broker(self, broker_name=None, order_details=None):
-        """
-        Returns the best available broker based on:
-        - Fees
-        - Liquidity
-        - Execution speed
-        - Slippage optimization
-        """
-        current_loss = self._get_current_loss()
-        if current_loss >= self.MAX_DAILY_LOSS:
-            logger.critical(f"❌ Max daily loss of {self.MAX_DAILY_LOSS}% reached. Stopping all trading.")
-            return self.available_brokers["dummy"]  # Disable real trading
+    def _update_broker_reliability(self, broker_name, success=True):
+        """Updates broker reliability score based on execution success."""
+        if broker_name not in self._broker_performance_cache:
+            self._broker_performance_cache[broker_name] = {"score": 100, "fails": 0}
+        
+        if success:
+            self._broker_performance_cache[broker_name]["score"] += 2  # Reward success
+        else:
+            self._broker_performance_cache[broker_name]["score"] -= 5  # Penalize failures
+            self._broker_performance_cache[broker_name]["fails"] += 1
+        
+        self._broker_performance_cache[broker_name]["score"] = max(0, self._broker_performance_cache[broker_name]["score"])
 
-        if self.mode == "TEST":
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    def get_broker(self, broker_name=None, order_details=None):
+        """Returns a broker instance while logging all failures."""
+        try:
+            current_loss = self._get_current_loss()
+            if current_loss >= self.MAX_DAILY_LOSS:
+                logger.critical(f"❌ Max daily loss of {self.MAX_DAILY_LOSS}% reached. Stopping all trading.")
+                return self.available_brokers["dummy"]  # Disable real trading
+
+            if self.mode == "TEST":
+                return self.available_brokers["dummy"]
+
+            if broker_name:
+                return UniversalBroker(user_id="default_user")  # Replace "default_user" with actual user logic
+
+            if order_details:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    return loop.create_task(self._select_best_broker(order_details))  # Non-blocking
+                else:
+                    return asyncio.run(self._select_best_broker(order_details))  # Blocking (CLI mode)
+
+            # ✅ Select a broker dynamically based on lowest slippage
+            best_broker = None
+            min_slippage = float("inf")
+
+            for name, broker in self.available_brokers.items():
+                try:
+                    slippage = broker.get_slippage(order_details)
+                    if slippage < min_slippage:
+                        min_slippage = slippage
+                        best_broker = broker
+                except Exception:
+                    continue  # Skip failed brokers
+
+            if best_broker:
+                logger.info(f"✅ Selected broker with lowest slippage: {best_broker}")
+                return best_broker
+
+            logger.warning("⚠️ No valid brokers available! Defaulting to Dummy Broker.")
             return self.available_brokers["dummy"]
 
-        if broker_name and broker_name.lower() in self.available_brokers:
-            return self.available_brokers[broker_name.lower()]
-
-        if order_details:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                return loop.create_task(self._select_best_broker(order_details))  # Non-blocking
-            else:
-                return asyncio.run(self._select_best_broker(order_details))  # Blocking (CLI mode)
-
-        # ✅ Select a broker dynamically based on lowest slippage
-        best_broker = None
-        min_slippage = float("inf")
-
-        for name, broker in self.available_brokers.items():
-            try:
-                slippage = broker.get_slippage(order_details)
-                if slippage < min_slippage:
-                    min_slippage = slippage
-                    best_broker = broker
-            except Exception:
-                continue  # Skip failed brokers
-
-        if best_broker:
-            logger.info(f"✅ Selected broker with lowest slippage: {best_broker}")
-            return best_broker
-
-        logger.warning("⚠️ No valid brokers available! Defaulting to Dummy Broker.")
-        return self.available_brokers["dummy"]
+        except Exception as e:
+            logger.error(f"❌ Broker selection failed. Details: {order_details}, Error: {e}")
+            self._update_broker_reliability(broker_name, success=False)
+            return self.available_brokers["dummy"]  # Fail-safe fallback
 
     async def fetch_broker_data(self, broker, order_details):
         """Asynchronously fetch broker performance data."""
@@ -228,3 +239,8 @@ class BrokerFactory:
 
         logger.error(f"❌ Failed to rotate API key for {env_var}. No backup key available.")
         return None
+
+    def get_account_balance(self, user_id):
+        """Fetch account balance dynamically from UniversalBroker."""
+        broker = UniversalBroker(user_id=user_id)
+        return broker.get_account_balance()
