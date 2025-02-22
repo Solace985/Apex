@@ -1,134 +1,263 @@
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::{collections::HashMap, path::Path, sync::Arc};
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use serde_json;
-use csv::Reader;
-use std::collections::HashMap;
-use rayon::prelude::*; // For parallel processing
-use log::{info, warn, error};
-use env_logger;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, BufReader};
+use anyhow::{Context, Result};
+use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
+use tracing::{info, warn, instrument};
+use async_trait::async_trait;
+use thiserror::Error;
 
+/// Custom error type for asset loading operations
+#[derive(Error, Debug)]
+pub enum AssetError {
+    #[error("Invalid asset data: {0}")]
+    InvalidData(String),
+    #[error("Database connection error")]
+    DbConnection(#[from] sqlx::Error),
+    #[error("I/O error")]
+    Io(#[from] std::io::Error),
+    #[error("Serialization error")]
+    Serialization(#[from] serde_json::Error),
+}
 
-/// Structure to represent a financial asset
-#[derive(Debug, Deserialize, Serialize, Clone)]
+/// Financial asset structure with validation
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct Asset {
-    pub symbol: String,
-    pub name: String,
-    pub asset_class: String,  // Stocks, Crypto, Forex
-    pub exchange: String,
-    #[serde(default = "default_price")]  // ✅ Adds default value for missing price
-    pub price: f64,
-    pub volume: u64,
+    #[serde(rename = "sym")]
+    symbol: String,
+    name: String,
+    #[serde(rename = "class")]
+    asset_class: String,
+    exchange: String,
+    #[serde(default = "default_price")]
+    price: f64,
+    volume: u64,
+    #[serde(skip)]
+    metadata: HashMap<String, String>,
 }
 
-// Define a default value function for price
-fn default_price() -> f64 {
-    0.0
-}
-
-/// Asset Loader - Loads assets from various sources (CSV, JSON, Database)
-pub struct AssetLoader {
-    assets: HashMap<String, Asset>,
-}
-
-impl AssetLoader {
-    /// Create a new AssetLoader instance
-    pub fn new() -> Self {
-        AssetLoader {
-            assets: HashMap::new(),
+impl Asset {
+    /// Validate asset data integrity
+    pub fn validate(&self) -> Result<(), AssetError> {
+        if self.price <= 0.0 {
+            return Err(AssetError::InvalidData(
+                format!("Invalid price for {}: {}", self.symbol, self.price)
+            ));
         }
+        if self.volume == 0 {
+            return Err(AssetError::InvalidData(
+                format!("Zero volume for {}", self.symbol)
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_price() -> f64 {
+    1.0
+}
+
+/// Thread-safe asset repository with async capabilities
+#[derive(Debug, Clone)]
+pub struct AssetRepository {
+    assets: Arc<DashMap<String, Asset>>,
+    db_pool: SqlitePool,
+}
+
+impl AssetRepository {
+    /// Create new repository with database connection
+    pub async fn new(db_url: &str) -> Result<Self> {
+        let options = SqliteConnectOptions::new()
+            .filename(db_url)
+            .create_if_missing(true);
+
+        let pool = SqlitePool::connect_with(options).await?;
+        sqlx::migrate!().run(&pool).await?;
+
+        Ok(Self {
+            assets: Arc::new(DashMap::new()),
+            db_pool: pool,
+        })
     }
 
-    /// Load assets from a CSV file with improved error handling and parallel processing
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), io::Error> {
-        let mut reader = Reader::from_path(file_path)?;
-        
-        let assets: Vec<Asset> = reader.deserialize()
-            .par_bridge()  // Converts the iterator to a parallel stream
-            .filter_map(|result| result.ok())
-            .collect();
+    /// Load assets from multiple sources in parallel
+    #[instrument(skip(self))]
+    pub async fn load_assets(&self, paths: &[&Path]) -> Result<()> {
+        let mut handles = vec![];
 
-        self.assets.extend(assets.into_iter().map(|asset| (asset.symbol.clone(), asset)));
+        for path in paths {
+            let path = path.to_path_buf();
+            let repo = self.clone();
+            
+            handles.push(tokio::spawn(async move {
+                match path.extension().and_then(|ext| ext.to_str()) {
+                    Some("csv") => repo.load_csv(&path).await,
+                    Some("json") => repo.load_json(&path).await,
+                    _ => {
+                        warn!("Unsupported file format: {:?}", path);
+                        Ok(())
+                    }
+                }
+            }));
+        }
+
+        futures::future::join_all(handles).await;
+        self.load_db().await?;
         
-        info!("✅ Loaded {} assets from CSV", self.assets.len());
         Ok(())
     }
 
-    /// Load assets from a JSON file with improved error handling
-    pub fn load_from_json(&mut self, file_path: &str) -> Result<(), io::Error> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let assets: Vec<Asset> = serde_json::from_reader(reader).unwrap_or_else(|_| vec![]);
+    /// Load assets from CSV with streaming and parallel processing
+    #[instrument(skip(self))]
+    async fn load_csv(&self, path: &Path) -> Result<()> {
+        let mut reader = csv_async::AsyncReaderBuilder::new()
+            .flexible(true)
+            .create_deserializer(BufReader::new(File::open(path).await?));
 
-        self.assets.extend(
-            assets.into_par_iter().map(|asset| (asset.symbol.clone(), asset))
-        );
+        let mut records = reader.deserialize::<Asset>();
+        let mut batch = Vec::with_capacity(1000);
 
-        info!("✅ Loaded {} assets from JSON", self.assets.len());
+        while let Some(record) = records.next().await {
+            let mut asset = record?;
+            asset.validate()?;
+            batch.push(asset);
+
+            if batch.len() >= 1000 {
+                self.process_batch(batch.drain(..).collect()).await;
+            }
+        }
+
+        if !batch.is_empty() {
+            self.process_batch(batch).await;
+        }
+
         Ok(())
     }
 
-    /// Load assets from an SQLite database
-    pub fn load_from_db(&mut self, db_path: &str) -> Result<()> {
-        let conn = Connection::open(db_path)?;
-        let mut stmt = conn.prepare("SELECT symbol, name, asset_class, exchange, price, volume FROM assets")?;
-        let asset_iter = stmt.query_map([], |row| {
-            Ok(Asset {
-                symbol: row.get(0)?,
-                name: row.get(1)?,
-                asset_class: row.get(2)?,
-                exchange: row.get(3)?,
-                price: row.get(4)?,
-                volume: row.get(5)?,
-            })
-        })?;
+    /// Process batch of assets with database insertion
+    async fn process_batch(&self, batch: Vec<Asset>) {
+        let repo = self.clone();
+        tokio::spawn(async move {
+            let mut transaction = repo.db_pool.begin().await.unwrap();
+            
+            for asset in batch {
+                sqlx::query!(
+                    r#"INSERT OR IGNORE INTO assets 
+                    (symbol, name, class, exchange, price, volume)
+                    VALUES (?, ?, ?, ?, ?, ?)"#,
+                    asset.symbol,
+                    asset.name,
+                    asset.asset_class,
+                    asset.exchange,
+                    asset.price,
+                    asset.volume as i64
+                )
+                .execute(&mut transaction)
+                .await
+                .unwrap();
 
-        for asset in asset_iter {
-            let asset = asset?;
+                repo.assets.insert(asset.symbol.clone(), asset);
+            }
+
+            transaction.commit().await.unwrap();
+        });
+    }
+
+    /// Load assets from JSON with streaming
+    #[instrument(skip(self))]
+    async fn load_json(&self, path: &Path) -> Result<()> {
+        let mut file = File::open(path).await?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).await?;
+
+        let assets: Vec<Asset> = serde_json::from_str(&contents)?;
+        for asset in assets {
+            asset.validate()?;
             self.assets.insert(asset.symbol.clone(), asset);
         }
 
-        info!("✅ Loaded {} assets from DB", self.assets.len());
         Ok(())
     }
 
-    /// Fetch an asset by symbol with additional logging
-    pub fn get_asset(&self, symbol: &str) -> Result<&Asset, String> {
-        self.assets.get(symbol).ok_or_else(|| format!("❌ Asset {} not found.", symbol))
-    }
-    
-    /// List all assets in sorted order by symbol
-    pub fn list_assets(&self) -> Vec<&Asset> {
-        let mut asset_list: Vec<&Asset> = self.assets.values().collect();
-        asset_list.sort_by(|a, b| a.symbol.cmp(&b.symbol));
-        asset_list
+    /// Load assets from database with caching
+    #[instrument(skip(self))]
+    async fn load_db(&self) -> Result<()> {
+        let records = sqlx::query_as!(
+            Asset,
+            r#"SELECT 
+                symbol, 
+                name, 
+                class as asset_class, 
+                exchange, 
+                price, 
+                volume 
+            FROM assets"#
+        )
+        .fetch_all(&self.db_pool)
+        .await?;
+
+        for asset in records {
+            self.assets.insert(asset.symbol.clone(), asset);
+        }
+
+        Ok(())
     }
 
-    /// Filter assets by asset class
-    pub fn filter_assets_by_class(&self, asset_class: &str) -> Vec<&Asset> {
-        self.assets.values()
-            .filter(|asset| asset.asset_class.eq_ignore_ascii_case(asset_class))
-            .collect()
+    /// Get asset with read-through cache
+    pub async fn get_asset(&self, symbol: &str) -> Option<Asset> {
+        if let Some(asset) = self.assets.get(symbol) {
+            return Some(asset.value().clone());
+        }
+
+        let asset = sqlx::query_as!(
+            Asset,
+            r#"SELECT 
+                symbol, 
+                name, 
+                class as asset_class, 
+                exchange, 
+                price, 
+                volume 
+            FROM assets 
+            WHERE symbol = ?"#,
+            symbol
+        )
+        .fetch_optional(&self.db_pool)
+        .await
+        .unwrap()?;
+
+        self.assets.insert(symbol.to_string(), asset.clone());
+        Some(asset)
     }
 }
 
-fn main() {
-    let mut loader = AssetLoader::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
 
-    // Example: Load assets from CSV and JSON
-    if let Err(err) = loader.load_from_csv("assets.csv") {
-        eprintln!("⚠️ Error loading CSV: {}", err);
-    }
-    if let Err(err) = loader.load_from_json("assets.json") {
-        eprintln!("⚠️ Error loading JSON: {}", err);
-    }
-    // Example: Load assets from SQLite database
-    if let Err(err) = loader.load_from_db("assets.db") {
-        eprintln!("⚠️ Error loading database: {}", err);
-    }
+    #[tokio::test]
+    async fn test_asset_loading() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        
+        let repo = AssetRepository::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
 
-    // Fetch and print an asset
-    if let Some(asset) = loader.get_asset("AAPL") {
-        info!("📊 Asset found: {:?}", asset);
+        let csv_path = dir.path().join("assets.csv");
+        tokio::fs::write(&csv_path, "sym,name,class,exchange,price,volume\nAAPL,Apple Inc.,STOCK,NASDAQ,150.0,1000000")
+            .await
+            .unwrap();
+
+        repo.load_assets(&[csv_path.as_path()])
+            .await
+            .unwrap();
+
+        let asset = repo.get_asset("AAPL").await.unwrap();
+        assert_eq!(asset.name, "Apple Inc.");
+        assert_eq!(asset.price, 150.0);
     }
 }

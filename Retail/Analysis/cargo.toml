@@ -14,3 +14,12 @@ rusqlite = "0.29"
 ndarray = "0.15"
 rustfft = "6.1"
 statrs = "0.16"
+tokio = { version = "1.0", features = ["full"] }
+sqlx = { version = "0.6", features = ["sqlite", "runtime-tokio-native-tls"] }
+dashmap = "5.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+thiserror = "1.0"
+async-trait = "0.1"
+csv-async = "0.2"
