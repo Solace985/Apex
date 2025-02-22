@@ -11,7 +11,6 @@ from typing import List, Dict, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-
 # Load environment variables
 load_dotenv()
 # Fetch encryption key securely and store in memory
@@ -165,7 +164,6 @@ def watch_config():
     
     threading.Thread(target=stop_observer, daemon=True).start()
 
-
 # Start watching for config changes in the background
 watch_config()
 
@@ -173,3 +171,51 @@ watch_config()
 config = load_config()
 logger.info(f"✅ Trading Mode: {config.mode}")
 logger.info(f"✅ Enabled Strategies: {config.strategies.enabled}")
+
+# -------- Key Management System --------
+class SecureVault:
+    _VAULT_KEY = os.environ.get('VAULT_KEY', Fernet.generate_key())
+    _cipher_suite = Fernet(_VAULT_KEY)
+    
+    @classmethod
+    def encrypt(cls, plaintext: str) -> bytes:
+        return cls._cipher_suite.encrypt(plaintext.encode())
+    
+    @classmethod
+    def decrypt(cls, ciphertext: bytes) -> str:
+        return cls._cipher_suite.decrypt(ciphertext).decode()
+
+# -------- Environment Validation --------
+class EnvValidator:
+    REQUIRED_ENV = ['VAULT_KEY', 'EXCHANGE_ENV']
+    
+    @classmethod
+    def validate(cls):
+        missing = [var for var in cls.REQUIRED_ENV if not os.environ.get(var)]
+        if missing:
+            raise EnvironmentError(f"Critical env vars missing: {missing}")
+
+# -------- Configuration Loader --------
+class AppConfig:
+    def __init__(self):
+        EnvValidator.validate()
+        
+        self.API_KEY = SecureVault.decrypt(
+            os.environ['ENCRYPTED_API_KEY']
+        )
+        self.SECRET_KEY = SecureVault.decrypt(
+            os.environ['ENCRYPTED_SECRET_KEY']
+        )
+        self.STRATEGY = os.getenv('TRADING_STRATEGY', 'SAFE_MODE')
+        
+        # Runtime validation
+        if not self._validate_strategy():
+            logging.critical("Invalid strategy configuration")
+            self.STRATEGY = 'FAILSAFE'
+    
+    def _validate_strategy(self) -> bool:
+        VALID_STRATEGIES = ['LSTM_V1', 'SAFE_MODE', 'FAILSAFE']
+        return self.STRATEGY in VALID_STRATEGIES
+
+# -------- Singleton Initialization --------
+config = AppConfig()

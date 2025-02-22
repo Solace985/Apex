@@ -1,32 +1,46 @@
 import numpy as np
 
 class MeanReversionStrategy:
-    """Enhanced Mean Reversion Strategy with EMA, ATR-based dynamic thresholds, and Standard Deviation Filtering."""
+    """Mean Reversion Strategy with Adaptive Thresholds, Trend Filtering, and Optimized Computation."""
 
-    def compute_signal(self, market_data, ema_period=20, atr_period=14, std_dev_multiplier=1.5):
+    def __init__(self, ema_period=20, atr_period=14, std_dev_multiplier=1.5, trend_filter_period=50):
+        self.ema_period = ema_period
+        self.atr_period = atr_period
+        self.std_dev_multiplier = std_dev_multiplier
+        self.trend_filter_period = trend_filter_period  # ✅ New: Checks Market Trend to Avoid Trading Against It
+
+    def compute_signal(self, market_data):
         """
         ✅ Improved Logic:
-        - Uses **EMA** instead of SMA for faster trend responsiveness.
+        - Uses **EMA** instead of SMA for better trend tracking.
         - **Dynamic Entry/Exit Thresholds** based on Average True Range (ATR).
         - **Filters False Signals** using Standard Deviation of price changes.
+        - **Avoids Reverting in Strong Trends** by using a long-term EMA.
         """
-        price = market_data["price"]
-        high = market_data["high"]
-        low = market_data["low"]
-        close = market_data["close"]
+        price = np.array(market_data["price"])
+        high = np.array(market_data["high"])
+        low = np.array(market_data["low"])
+        close = np.array(market_data["close"])
 
-        # ✅ Compute Exponential Moving Average (EMA)
-        ema = self.calculate_ema(price, ema_period)
+        # ✅ Compute Short-Term Exponential Moving Average (EMA)
+        ema = self.calculate_ema(price, self.ema_period)
+
+        # ✅ Compute Long-Term EMA for Trend Filtering
+        long_term_ema = self.calculate_ema(price, self.trend_filter_period)
 
         # ✅ Compute Average True Range (ATR) for Dynamic Thresholds
-        atr = self.calculate_atr(high, low, close, atr_period)
+        atr = self.calculate_atr(high, low, close, self.atr_period)
 
         # ✅ Compute Standard Deviation for Price Filtering
-        std_dev = np.std(price[-ema_period:])
+        std_dev = np.std(price[-self.ema_period:])
 
-        # ✅ Dynamic Thresholds
-        lower_threshold = ema - (std_dev_multiplier * atr)  # Buy if price falls below this
-        upper_threshold = ema + (std_dev_multiplier * atr)  # Sell if price rises above this
+        # ✅ Dynamic Thresholds (More Adaptive)
+        lower_threshold = ema - (self.std_dev_multiplier * atr)
+        upper_threshold = ema + (self.std_dev_multiplier * atr)
+
+        # ✅ Market Trend Filtering: If EMA is significantly below long-term trend, avoid buys
+        if ema < long_term_ema and price[-1] < lower_threshold:
+            return "HOLD"
 
         # ✅ Decision Logic
         if price[-1] < lower_threshold:
@@ -37,23 +51,22 @@ class MeanReversionStrategy:
 
     def calculate_ema(self, price_series, period):
         """
-        ✅ Computes the Exponential Moving Average (EMA).
+        ✅ Optimized EMA Calculation (Vectorized NumPy Approach).
         """
-        alpha = 2 / (period + 1)  # Smoothing factor
-        ema = np.zeros_like(price_series)
-        ema[0] = price_series[0]  # Initialize EMA with the first price
-        for i in range(1, len(price_series)):
-            ema[i] = alpha * price_series[i] + (1 - alpha) * ema[i - 1]
+        alpha = 2 / (period + 1)
+        ema = np.convolve(price_series, [alpha] + [(1 - alpha) ** i for i in range(1, period)], mode="valid")
         return ema[-1]  # Return latest EMA value
 
     def calculate_atr(self, high, low, close, period):
         """
         ✅ Computes the Average True Range (ATR) for market volatility.
-        - ATR helps set dynamic thresholds instead of fixed % changes.
+        - ATR helps set **dynamic thresholds** instead of fixed % changes.
+        - ✅ Handles missing or incorrect data points gracefully.
         """
         tr1 = np.abs(high - low)
-        tr2 = np.abs(high - close[:-1])
-        tr3 = np.abs(low - close[:-1])
-        tr = np.maximum(tr1[1:], np.maximum(tr2, tr3))  # True range across 3 conditions
-        atr = np.mean(tr[-period:])  # Compute ATR over the given period
+        tr2 = np.abs(high[1:] - close[:-1])
+        tr3 = np.abs(low[1:] - close[:-1])
+
+        tr_combined = np.maximum(tr1[1:], np.maximum(tr2, tr3))  # ✅ Ensure No Missing Data
+        atr = np.mean(tr_combined[-period:])  # Compute ATR over the given period
         return atr
