@@ -1,4 +1,5 @@
 import logging
+import subprocess
 from Strategies.mean_reversion import MeanReversionStrategy
 from Strategies.momentum_breakout import MomentumBreakoutStrategy
 from Strategies.trend_following import TrendFollowingStrategy
@@ -32,11 +33,19 @@ class StrategyOrchestrator:
         return selected_strategy
 
     def execute_trades(self, market_data):
-        """Runs the selected strategy on the given market data."""
+        """Runs the selected strategy and executes the trade."""
         strategy = self.select_best_strategy(market_data)
         trade_signal = strategy.generate_signal(market_data)
 
         if trade_signal:
-            self.logger.info(f"Executing Trade: {trade_signal}")
+            print(f"✅ Executing Trade: {trade_signal}")
+
+            # 🔹 Call Rust execution system
+            command = [
+                "./target/release/trading_bot",  # Adjust path if needed
+                "--symbol", trade_signal["symbol"],
+                "--order_type", trade_signal["order_type"]
+            ]
+            subprocess.run(command)
             return trade_signal  # Send signal to order execution engine
         return None

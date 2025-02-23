@@ -9,6 +9,8 @@ use tracing::{info as tracing_info, warn as tracing_warn, error as tracing_error
 use tracing_subscriber;
 use thiserror::Error;
 use rand::Rng;
+use reqwest::Client;
+use serde_json::json;
 
 // Custom Error Types
 #[derive(Error, Debug)]
@@ -223,6 +225,28 @@ impl<B: BrokerAPI + Send + Sync> ExecutionEngine<B> {
         self.execute_with_retries(order).await
     }
 
+    pub async fn execute_trade(
+        &self,
+        symbol: &str,
+        order_type: &str,
+        volatility: f64,
+        broker_api_url: &str,
+        api_key: &str
+    ) -> Result<(), ExecutionError> {
+        // 🔹 Get position size from risk engine
+        let position_size = self.risk_manager.calculate_position_size(symbol, volatility);
+
+        if position_size <= 0.0 {
+            error!("❌ Trade aborted due to risk engine restrictions.");
+            return Err(ExecutionError::InvalidOrder("Position size is zero".to_string()));
+        }
+
+        // 🔹 Place order via send_order()
+        self.send_order(symbol, order_type, position_size, None, broker_api_url, api_key).await?;
+
+        Ok(())
+    }
+
     async fn execute_with_retries(&self, order: &Order) -> Result<(), ExecutionError> {
         let mut attempts = 0;
         let max_retries = 3;
@@ -347,7 +371,40 @@ impl<B: BrokerAPI + Send + Sync> ExecutionEngine<B> {
         }
     }
     
+    pub async fn send_order(
+        &self,
+        symbol: &str,
+        order_type: &str,
+        size: f64,
+        price: Option<f64>,
+        broker_api_url: &str,
+        api_key: &str
+    ) -> Result<(), ExecutionError> {
+        let client = Client::new();
+        let payload = json!({
+            "symbol": symbol,
+            "order_type": order_type,
+            "size": size,
+            "price": price
+        });
 
+        let response = client.post(broker_api_url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&payload)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            info!("✅ Order placed successfully: {:?}", payload);
+            Ok(())
+        } else {
+            error!("❌ Order placement failed: {:?}", response.text().await?);
+            Err(ExecutionError::BrokerError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Order failed",
+            ))))
+        }
+    }
 
     pub async fn start_hft_websocket(url: &str) -> Result<(), Box<dyn std::error::Error>> {
         loop {
@@ -388,8 +445,6 @@ impl<B: BrokerAPI + Send + Sync> ExecutionEngine<B> {
         }
     }
     
-    
-
     // Additional methods for concurrent execution, monitoring, etc.
 }
 
@@ -415,6 +470,7 @@ pub struct ExecutionConfig {
 #[async_trait]
 pub trait RiskManager: Send + Sync {
     async fn validate(&self, order: &Order) -> Result<bool, ExecutionError>;
+    async fn calculate_position_size(&self, symbol: &str, volatility: f64) -> f64;
 }
 
 #[async_trait]
