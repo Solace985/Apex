@@ -10,18 +10,28 @@ from Strategies.mean_reversion import MeanReversionStrategy
 from Strategies.momentum_breakout import MomentumBreakoutStrategy
 from Strategies.trend_following import TrendFollowingStrategy
 from Strategies.regime_detection import RegimeDetectionStrategy
+import logging
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(message)s")
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Actor(nn.Module):
     """Actor network for MADDPG."""
     def __init__(self, state_dim, action_dim):
         super(Actor, self).__init__()
         self.fc1 = nn.Linear(state_dim, 256)
+        self.dropout1 = nn.Dropout(0.2)
         self.fc2 = nn.Linear(256, 128)
+        self.dropout2 = nn.Dropout(0.2)
         self.fc3 = nn.Linear(128, action_dim)
 
     def forward(self, state):
         x = torch.relu(self.fc1(state))
+        x = self.dropout1(x)
         x = torch.relu(self.fc2(x))
+        x = self.dropout2(x)
         return torch.tanh(self.fc3(x))
 
 class Critic(nn.Module):
@@ -87,8 +97,10 @@ class MADDPG:
         self.action_dim = action_dim
 
         # ✅ Initialize Actor-Critic Networks
-        self.actor = Actor(state_dim, action_dim)
-        self.critic = Critic(state_dim, action_dim)
+        self.actor = Actor(state_dim, action_dim).to(device)
+        self.critic = Critic(state_dim, action_dim).to(device)
+        self.target_actor = Actor(state_dim, action_dim).to(device)  # Target actor
+        self.target_critic = Critic(state_dim, action_dim).to(device)  # Target critic
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.001)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.001)
 
@@ -113,54 +125,76 @@ class MADDPG:
     def load_model(self):
         """Loads a pre-trained MADDPG model."""
         try:
-            self.actor.load_state_dict(torch.load(self.model_path.replace(".pth", "_actor.pth")))
-            self.critic.load_state_dict(torch.load(self.model_path.replace(".pth", "_critic.pth")))
-            print(f"✅ Loaded trained MADDPG models from {self.model_path}")
-        except:
-            print("🚀 No pre-trained model found.")
+            self.actor.load_state_dict(torch.load(self.model_path.replace(".pth", "_actor.pth"), map_location=device))
+            self.critic.load_state_dict(torch.load(self.model_path.replace(".pth", "_critic.pth"), map_location=device))
+            logger.info("✅ Loaded trained MADDPG models.")
+        except Exception as e:
+            logger.warning(f"🚀 Model loading issue: {e}")
 
     def remember(self, state, action, reward, next_state, done):
         """Stores experiences for training."""
         self.memory.append((state, action, reward, next_state, done))
 
-    def update(self, replay_buffer, batch_size=64):
+    def soft_update(self, target, source, tau=0.005):
+        """Soft update for target networks."""
+        for target_param, param in zip(target.parameters(), source.parameters()):
+            target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+
+    def update(self, replay_buffer, batch_size=64, patience=10):
         """
         ✅ Trains the MADDPG model using experience replay.
         - Uses soft updates to stabilize learning.
+        - Implements early stopping based on loss.
         """
-        if len(replay_buffer.memory) < batch_size:
-            return
+        min_loss = np.inf
+        patience_counter = 0
 
-        states, actions, rewards, next_states, dones = replay_buffer.sample_batch(batch_size)
+        for epoch in range(100):  # example epoch range
+            if len(replay_buffer.memory) < batch_size:
+                continue
 
-        states = torch.FloatTensor(states)
-        actions = torch.FloatTensor(actions)
-        rewards = torch.FloatTensor(rewards).unsqueeze(1)
-        next_states = torch.FloatTensor(next_states)
+            states, actions, rewards, next_states, dones = replay_buffer.sample_batch(batch_size)
 
-        # ✅ Critic update
-        next_actions = self.actor(next_states)
-        target_q_values = self.critic(next_states, next_actions).detach()
-        y = rewards + 0.99 * target_q_values
-        critic_loss = nn.MSELoss()(self.critic(states, actions), y)
+            # Move tensors to device
+            states = torch.FloatTensor(states).to(device)
+            actions = torch.FloatTensor(actions).to(device)
+            rewards = torch.FloatTensor(rewards).unsqueeze(1).to(device)
+            next_states = torch.FloatTensor(next_states).to(device)
 
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
+            # Critic update
+            next_actions = self.target_actor(next_states)
+            target_q_values = self.target_critic(next_states, next_actions).detach()
+            y = rewards + 0.99 * target_q_values
+            critic_loss = nn.MSELoss()(self.critic(states, actions), y)
 
-        # ✅ Actor update
-        actor_loss = -self.critic(states, self.actor(states)).mean()
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
+            self.critic_optimizer.zero_grad()
+            critic_loss.backward()
+            self.critic_optimizer.step()
 
-        # ✅ Proper soft update for actor network
-        for target_param, param in zip(self.actor.parameters(), self.actor.parameters()):
-            target_param.data.copy_(0.005 * param.data + (1 - 0.005) * target_param.data)
+            # Actor update
+            actor_loss = -self.critic(states, self.actor(states)).mean()
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self.actor_optimizer.step()
 
-        # ✅ Proper soft update for critic network
-        for target_param, param in zip(self.critic.parameters(), self.critic.parameters()):
-            target_param.data.copy_(0.005 * param.data + (1 - 0.005) * target_param.data)
+            # Soft Updates
+            self.soft_update(self.target_actor, self.actor)
+            self.soft_update(self.target_critic, self.critic)
+
+            # Early Stopping Logic
+            total_loss = actor_loss.item() + critic_loss.item()
+            if total_loss < min_loss:
+                min_loss = total_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    logger.info(f"⚠️ Early stopping triggered after {epoch+1} epochs with loss {total_loss:.4f}")
+                    break
+
+            # Periodic Model Saving
+            if epoch % 10 == 0 or epoch == 99:  # 99 because range is 0-99
+                self.save_model(best_model=False)
 
     def update_model(self, state, action, reward, next_state, done, batch_size=64):
         """
@@ -175,10 +209,11 @@ class MADDPG:
 
         states, actions, rewards, next_states, dones = zip(*random.sample(self.memory, batch_size))
 
-        states = torch.FloatTensor(states)
-        actions = torch.FloatTensor(actions)
-        rewards = torch.FloatTensor(rewards).unsqueeze(1)
-        next_states = torch.FloatTensor(next_states)
+        # Move tensors to device
+        states = torch.FloatTensor(states).to(device)
+        actions = torch.FloatTensor(actions).to(device)
+        rewards = torch.FloatTensor(rewards).unsqueeze(1).to(device)
+        next_states = torch.FloatTensor(next_states).to(device)
 
         # ✅ Update Critic
         next_actions = self.actor(next_states)
@@ -197,53 +232,70 @@ class MADDPG:
         self.actor_optimizer.step()
 
         # ✅ Soft Update
-        tau = 0.005
-        for target_param, param in zip(self.actor.parameters(), self.actor.parameters()):
-            target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+        self.soft_update(self.target_actor, self.actor)
+        self.soft_update(self.target_critic, self.critic)
 
-        for target_param, param in zip(self.critic.parameters(), self.critic.parameters()):
-            target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
-
-        self.save_model()  # ✅ Save updated model
+        # Periodic Model Saving
+        self.save_model(best_model=False)  # Save updated model
         print("📈 RL Model Updated with Live Trading Data.")
 
-    def save_model(self):
-        """Saves the trained model for future use."""
-        torch.save(self.actor.state_dict(), self.model_path.replace(".pth", "_actor.pth"))
-        torch.save(self.critic.state_dict(), self.model_path.replace(".pth", "_critic.pth"))
-        print(f"💾 Actor & Critic models saved at {self.model_path}")
+    def save_model(self, best_model=True):
+        actor_path = self.model_path.replace(".pth", "_actor_best.pth" if best_model else "_actor.pth")
+        critic_path = self.model_path.replace(".pth", "_critic_best.pth" if best_model else "_critic.pth")
+
+        torch.save(self.actor.state_dict(), actor_path)
+        torch.save(self.critic.state_dict(), critic_path)
+        logger.info(f"💾 Models saved successfully at {actor_path} and {critic_path}")
 
     def select_action(self, state):
         """Selects an action given the current state."""
-        state_tensor = torch.FloatTensor(state).unsqueeze(0)
-        return self.actor(state_tensor).detach().numpy()[0]
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
+        return self.actor(state_tensor).cpu().detach().numpy()[0]
 
 def compute_reward(self, predicted_price, true_price, action):
     """
-    ✅ Advanced Reward System:
-    - Reward is higher when the bot **predicts the correct direction of movement.**
-    - Adds **penalty for incorrect trades** and **incentives for correct trend predictions.**
+    ✅ Optimized Reward System (Combined):
+    - Rewards correct directional predictions (BUY/SELL).
+    - Implements Stop Loss (-5%) & Take Profit (+5%) mechanisms.
+    - Incorporates sentiment & macroeconomic adjustments.
+    - Additional incentives for trend-following and penalties for incorrect trades.
     """
+
     price_change = true_price - predicted_price
+    reward = 0
 
     # ✅ Reward/Penalty Based on Action
     if action == "BUY":
-        reward = max(price_change, 0) * 2  # ✅ 2x reward for correct upward prediction
+        reward = max(price_change, 0) * 2  # 2x reward for correct upward trades
+        reward -= max(-price_change, 0) * 2  # 2x penalty for incorrect buy
     elif action == "SELL":
-        reward = max(-price_change, 0) * 2  # ✅ 2x reward for correct downward prediction
+        reward = max(-price_change, 0) * 2  # 2x reward for correct downward trades
+        reward -= max(price_change, 0) * 2  # 2x penalty for incorrect sell
     elif action == "HOLD":
-        reward = -abs(price_change) * 0.1  # ✅ Small penalty for holding incorrectly
+        reward = -abs(price_change) * 0.1  # Small penalty for incorrect holding
     else:
-        reward = -2  # ✅ Large penalty for invalid action
+        reward = -2  # Large penalty for invalid action
 
-    # ✅ Additional Reward for Trend Following
-    if abs(price_change) > 0.5:  # If significant price movement
-        reward *= 1.5  # ✅ Encourage strong trend following
+    # ✅ Stop Loss (-5%) & Take Profit (+5%)
+    if abs(price_change) >= 0.05:  
+        if price_change < 0:
+            reward *= -2  # Heavy penalty if wrong beyond stop-loss threshold
+        else:
+            reward *= 1.5  # Boost reward for achieving take-profit target
 
-    # ✅ Adjust reward based on **sentiment & macroeconomic factors**
+    # ✅ Additional Reward for Strong Trend-Following
+    if abs(price_change) > 0.5:
+        reward *= 1.5
+
+    # ✅ Adjust reward based on Sentiment & Macroeconomic Factors
     sentiment = self.fundamental_analysis.fetch_news_sentiment()
     macro = self.fundamental_analysis.fetch_macro_factors()
-    reward *= (1 + sentiment * 0.1) * (1 - macro["inflation"] * 0.05)
+    
+    # Robust reward adjustment:
+    sentiment_factor = 1 + (sentiment * 0.1 if sentiment else 0)
+    inflation_factor = 1 - (macro.get("inflation", 0) * 0.05)
+
+    reward *= sentiment_factor * inflation_factor
 
     return reward
 
@@ -252,19 +304,25 @@ def select_action(self, market_data, true_price=None):
     ✅ Uses multiple strategies + MADDPG RL model to decide whether to trade.
     - Uses **Regime Detection** to decide **which strategy** is optimal.
     """
-    state_tensor = torch.FloatTensor(market_data).unsqueeze(0)
+    state_tensor = torch.FloatTensor(market_data).unsqueeze(0).to(device)
     raw_action = self.actor(state_tensor).detach().numpy()[0]  # ✅ Initial action from RL model
 
     # ✅ Compute Technical Indicators
-    indicators = {
-        "rsi": self.tech_analysis.relative_strength_index(market_data["price"]),
-        "bollinger_upper": self.tech_analysis.bollinger_bands(market_data["price"])[0],
-        "bollinger_lower": self.tech_analysis.bollinger_bands(market_data["price"])[1],
-        "stochastic_oscillator": self.tech_analysis.stochastic_oscillator(market_data["price"]),
-        "atr": self.tech_analysis.average_true_range(market_data["high"], market_data["low"], market_data["close"]),
-        "aroon_up": self.tech_analysis.aroon_indicator(market_data["high"], market_data["low"])[0],
-        "aroon_down": self.tech_analysis.aroon_indicator(market_data["high"], market_data["low"])[1],
-    }
+    try:
+        indicators = {
+            "rsi": self.tech_analysis.relative_strength_index(market_data["price"]),
+            "bollinger_upper": self.tech_analysis.bollinger_bands(market_data["price"])[0],
+            "bollinger_lower": self.tech_analysis.bollinger_bands(market_data["price"])[1],
+            "stochastic_oscillator": self.tech_analysis.stochastic_oscillator(market_data["price"]),
+            "atr": self.tech_analysis.average_true_range(
+                market_data["high"], market_data["low"], market_data["close"]
+            ),
+            "aroon_up": self.tech_analysis.aroon_indicator(market_data["high"], market_data["low"])[0],
+            "aroon_down": self.tech_analysis.aroon_indicator(market_data["high"], market_data["low"])[1],
+        }
+    except Exception as e:
+        logger.warning(f"Indicator calculation failed: {e}")
+        return 0  # Default HOLD if indicators fail
 
     # ✅ Determine Market Regime (Trending or Ranging)
     market_regime = self.strategies["regime_detection"].detect_regime(market_data)

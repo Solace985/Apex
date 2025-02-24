@@ -24,7 +24,7 @@ from keras.layers import LSTM, Dense
 from Retail.AI_Models.Reinforcement.maddpg_model import MADDPG
 import numpy as np
 from Retail.utils.logger import setup_logger
-from Retail.utils.data_feed import DataFeed as UtilsDataFeed
+from Retail.Data.data_feed import DataFeed as UtilsDataFeed
 from Retail.utils.strategy_manager import StrategyManager
 from Retail.utils.risk_manager import RiskManager as UtilsRiskManager
 from Retail.AI_Models.machine_learning import MachineLearningModel
@@ -42,7 +42,7 @@ import time
 from Retail.Data.data_feed import DataFeed
 from Retail.Core.Python.trading_ai import TradingAI
 from Retail.Core.Python.risk_management import RiskManager
-from Retail.Core.execution_engine import ExecutionEngine
+from Retail.Core.Rust.execution_engine import ExecutionEngine
 from Retail.Metrics.performance_metrics import PerformanceTracker
 from Retail.Brokers.broker_factory import BrokerFactory
 from Retail.Strategies.trend_following import TrendFollowingStrategy
