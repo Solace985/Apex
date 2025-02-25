@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from Retail.Backtesting.backtest_runner import BacktestOrchestrator
+from Apex.Tests.backtesting.backtest_runner import BacktestOrchestrator
 
 class TechnicalAnalysis:
     """Advanced Technical Analysis Toolkit."""
@@ -56,16 +56,9 @@ class TechnicalAnalysis:
 
     @staticmethod
     def average_true_range(high, low, close, period=14):
-        """Average True Range (ATR)."""
-        high, low, close = pd.Series(high), pd.Series(low), pd.Series(close)
-        if len(high) < period:
-            return None
-        tr1 = high - low
-        tr2 = (high - close.shift()).abs()
-        tr3 = (low - close.shift()).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(window=period).mean().iloc[-1]
-        return atr
+        """Optimized ATR Calculation (reduces redundant calculations)."""
+        tr = np.maximum(high - low, np.maximum(abs(high - close.shift()), abs(low - close.shift())))
+        return np.mean(tr[-period:]) if len(tr) >= period else None
 
     @staticmethod
     def aroon_indicator(high, low, period=25):
@@ -123,19 +116,50 @@ class TechnicalAnalysis:
 
     @staticmethod
     def adx(high, low, close, period=14):
-        """Average Directional Index (ADX)."""
-        high, low, close = pd.Series(high), pd.Series(low), pd.Series(close)
-        if len(high) < period or len(low) < period or len(close) < period:
+        """Optimized ADX Calculation."""
+        plus_dm = np.maximum(high[1:] - high[:-1], 0)
+        minus_dm = np.maximum(low[:-1] - low[1:], 0)
+        
+        atr = TechnicalAnalysis.average_true_range(high, low, close, period)
+        if atr is None:
             return None
-        plus_dm = high.diff().clip(lower=0)
-        minus_dm = low.diff().clip(upper=0).abs()
-        tr = TechnicalAnalysis.average_true_range(high, low, close, period)
 
-        plus_di = 100 * (plus_dm.ewm(span=period).mean().iloc[-1] / (tr + 1e-10))
-        minus_di = 100 * (minus_dm.ewm(span=period).mean().iloc[-1] / (tr + 1e-10))
-        dx = 100 * (np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
-        adx_value = pd.Series(dx).ewm(span=period).mean().iloc[-1]
-        return adx_value
+        plus_di = 100 * (np.mean(plus_dm[-period:]) / atr)
+        minus_di = 100 * (np.mean(minus_dm[-period:]) / atr)
+        dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
+        return np.mean(dx[-period:])
+
+    @staticmethod
+    def vwap(close_prices, volume):
+        """Volume Weighted Average Price (VWAP)."""
+        if len(close_prices) < 1 or len(volume) < 1:
+            return None
+        return np.cumsum(close_prices * volume) / np.cumsum(volume)
+
+    @staticmethod
+    def obv(close_prices, volume):
+        """On-Balance Volume (OBV)."""
+        obv = [0]
+        for i in range(1, len(close_prices)):
+            if close_prices[i] > close_prices[i - 1]:
+                obv.append(obv[-1] + volume[i])
+            elif close_prices[i] < close_prices[i - 1]:
+                obv.append(obv[-1] - volume[i])
+            else:
+                obv.append(obv[-1])
+        return obv[-1]
+
+    @staticmethod
+    def supertrend(high, low, close, period=10, multiplier=3):
+        """Supertrend Indicator."""
+        atr = TechnicalAnalysis.average_true_range(high, low, close, period)
+        if atr is None:
+            return None
+        hl2 = (high + low) / 2
+        upper_band = hl2 + (multiplier * atr)
+        lower_band = hl2 - (multiplier * atr)
+
+        return {"upper_band": upper_band[-1], "lower_band": lower_band[-1]}
 
     @staticmethod
     def fibonacci_retracement(high_price, low_price):
@@ -168,3 +192,178 @@ class TechnicalAnalysis:
             if self.evaluate_indicator_effectiveness(asset_class, indicator_func, historical_data):
                 effective_indicators.append(indicator_func)
         return effective_indicators
+    
+    def evaluate_indicator_performance(self, asset_class, indicator_func, historical_data):
+        """Evaluates the effectiveness of an indicator in past trading scenarios."""
+        indicators_with = historical_data.apply(indicator_func, axis=1)
+        indicators_without = historical_data.drop(columns=[indicator_func.__name__], errors="ignore")
+
+        performance_with = BacktestOrchestrator(asset_class, indicators=indicators_with)
+        performance_without = BacktestOrchestrator(asset_class, indicators=indicators_without)
+
+        # Compute confidence score based on Sharpe Ratio comparison
+        confidence_score = performance_with.sharpe_ratio - performance_without.sharpe_ratio
+        return max(0, confidence_score)  # Confidence must be non-negative
+
+    def indicator_confidence_weights(self, historical_data, rolling_window=50):
+        """
+        Dynamically assigns confidence weights to each indicator based on past performance.
+        Uses a rolling window to continuously update confidence.
+        """
+        confidence_scores = {}
+        for indicator_name, indicator_func in self.indicators.items():
+            recent_data = historical_data.tail(rolling_window)  # Only consider recent data
+            confidence_scores[indicator_name] = self.evaluate_indicator_performance("crypto", indicator_func, recent_data)
+
+        # Normalize confidence scores
+        total_confidence = sum(confidence_scores.values()) + 1e-10  # Avoid division by zero
+        normalized_confidence = {key: value / total_confidence for key, value in confidence_scores.items()}
+
+        return normalized_confidence
+
+    def select_best_indicators(self, market_data, asset_class, ai_model, historical_data):
+        """
+        Uses AI reinforcement learning to dynamically select the most effective indicators.
+        Adds confidence weighting based on past accuracy to avoid overfitting.
+        """
+        indicators = {
+            "RSI": self.relative_strength_index(market_data["close"]),
+            "MACD": self.macd(market_data["close"])[0],
+            "Bollinger_Upper": self.bollinger_bands(market_data["close"])[0],
+            "Bollinger_Lower": self.bollinger_bands(market_data["close"])[1],
+            "ADX": self.adx(market_data["high"], market_data["low"], market_data["close"]),
+            "VWAP": self.vwap(market_data["close"], market_data["volume"]),
+            "Supertrend": self.supertrend(market_data["high"], market_data["low"], market_data["close"]),
+        }
+
+        # Normalize values to prevent extreme impact
+        normalized_indicators = {key: self._normalize(value) for key, value in indicators.items() if value is not None}
+
+        # Assign confidence scores to each indicator based on past performance
+        confidence_weights = self.indicator_confidence_weights(historical_data)
+
+        # Apply weighting to indicators before passing to AI
+        weighted_indicators = {key: normalized_indicators[key] * confidence_weights.get(key, 1) for key in normalized_indicators}
+
+        market_condition = self.detect_market_condition(market_data)
+
+        # Assign priority to indicators based on market condition
+        if market_condition == "trend":
+            priority_indicators = ["ADX", "Supertrend", "Bollinger_Upper", "Bollinger_Lower"]
+        elif market_condition == "range":
+            priority_indicators = ["RSI", "MACD", "Stochastic_Oscillator"]
+        else:
+            priority_indicators = list(weighted_indicators.keys())  # Use all if uncertain
+
+        # AI chooses which indicators to prioritize, but respects the hierarchy
+        action = ai_model.select_action(np.array([weighted_indicators[ind] for ind in priority_indicators if ind in weighted_indicators]))
+
+        # Select only the top-performing indicators based on AI decision, within priority groups
+        selected_indicators = {name: weighted_indicators[name] for i, name in enumerate(priority_indicators) if name in weighted_indicators and action[i] > 0.5}
+
+        contradiction_score = self.detect_conflicting_indicators(selected_indicators)
+
+        # If contradiction score is too high, reduce trading confidence
+        if contradiction_score > 1.5:
+            selected_indicators = {key: value * 0.5 for key, value in selected_indicators.items()}
+
+        # If contradiction is extreme, avoid making a trade
+        if contradiction_score > 2.5:
+            return {}  # No trade signal
+
+        return selected_indicators
+
+    def detect_conflicting_indicators(self, selected_indicators, historical_data):
+        """
+        Detects conflicts between selected indicators and resolves them based on past performance.
+        Uses historical win rates to determine which indicator should be prioritized.
+        """
+        contradiction_score = 0
+        conflict_pairs = [
+            ("RSI", "MACD"),
+            ("Bollinger_Upper", "ADX"),
+            ("Supertrend", "VWAP"),
+        ]
+
+        indicator_win_rates = self.get_indicator_win_rates(historical_data)  # New function to get past performance
+
+        for ind1, ind2 in conflict_pairs:
+            if ind1 in selected_indicators and ind2 in selected_indicators:
+                value1 = selected_indicators[ind1]
+                value2 = selected_indicators[ind2]
+
+                if (value1 > 0 and value2 < 0) or (value1 < 0 and value2 > 0):
+                    contradiction_score += abs(value1 - value2)
+
+                    # Resolve contradiction based on past win rates
+                    if indicator_win_rates[ind1] > indicator_win_rates[ind2]:
+                        selected_indicators[ind2] *= 0.5  # Reduce confidence in weaker indicator
+                    elif indicator_win_rates[ind1] < indicator_win_rates[ind2]:
+                        selected_indicators[ind1] *= 0.5  # Reduce confidence in weaker indicator
+                    else:
+                        selected_indicators[ind1] *= 0.75  # Reduce both slightly if they are equal
+                        selected_indicators[ind2] *= 0.75
+
+        return contradiction_score
+
+    def _normalize(self, value):
+        """Helper function to normalize indicator values to prevent skewed weight distribution."""
+        return (value - np.mean(value)) / (np.std(value) + 1e-10) if isinstance(value, (int, float)) else value
+
+    def get_indicator_win_rates(self, historical_data):
+        """
+        Retrieves the historical win rates of each indicator based on past trade outcomes.
+        Win rate = Percentage of times the indicator correctly predicted market direction.
+        """
+        win_rates = {
+            "RSI": 0.55,  # Example win rates (to be computed dynamically from backtesting data)
+            "MACD": 0.60,
+            "Bollinger_Upper": 0.50,
+            "ADX": 0.65,
+            "Supertrend": 0.70,
+            "VWAP": 0.58,
+        }
+
+        # In a real implementation, retrieve actual win rates from historical backtesting
+        return win_rates
+
+    def detect_market_condition(self, market_data):
+        """
+        Determines whether the market is trending or ranging.
+        Returns:
+            "trend" - If trend indicators confirm a strong trend.
+            "range" - If momentum indicators show range-bound movement.
+            "uncertain" - If mixed signals are detected.
+        """
+        adx_value = self.adx(market_data["high"], market_data["low"], market_data["close"])
+        rsi_value = self.relative_strength_index(market_data["close"])
+        supertrend = self.supertrend(market_data["high"], market_data["low"], market_data["close"])
+        bollinger_upper, bollinger_lower = self.bollinger_bands(market_data["close"])
+        vwap_value = self.vwap(market_data["close"], market_data["volume"])
+        avg_volume = np.mean(market_data["volume"][-14:])  # 14-period average volume
+
+        if adx_value is None or rsi_value is None or supertrend is None or vwap_value is None:
+            return "uncertain"
+
+        # Define strong trend: ADX > 25, RSI moving away from 50, price above Bollinger bands
+        is_trending = (
+            adx_value > 25
+            and abs(rsi_value - 50) > 10
+            and market_data["close"].iloc[-1] > bollinger_upper
+            and market_data["volume"].iloc[-1] > avg_volume  # Ensuring trend is backed by volume
+        )
+
+        # Define range: RSI between 40-60, ADX < 20, price inside Bollinger bands
+        is_ranging = (
+            40 < rsi_value < 60
+            and adx_value < 20
+            and bollinger_lower < market_data["close"].iloc[-1] < bollinger_upper
+            and market_data["volume"].iloc[-1] < avg_volume  # Low volume means weak trend
+        )
+
+        if is_trending:
+            return "trend"
+        elif is_ranging:
+            return "range"
+        
+        return "uncertain"

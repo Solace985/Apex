@@ -5,9 +5,9 @@ from typing import Dict, Any
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense
 from Apex.src.ai.forecasting.order_flow import InstitutionalOrderFlow
-from Retail.AI_Models.Reinforcement.maddpg_model import ReinforcementLearningRisk
-from Retail.Core.Python.market_impact import MarketImpactAnalyzer
-from Retail.Core.Python.config import load_config
+from Apex.src.ai.reinforcement.maddpg_model import ReinforcementLearningRisk
+from Apex.src.Core.trading.execution.market_impact import MarketImpactAnalyzer
+from Apex.src.Core.trading.ai.config import load_config
 
 config = load_config()
 

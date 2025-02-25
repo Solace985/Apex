@@ -4,12 +4,13 @@ import torch.nn as nn
 import torch.optim as optim
 from collections import deque
 import random
+import schedule
 from Apex.src.ai.analysis.fundamental_analysis import FundamentalAnalysis
 from Apex.src.ai.forecasting.technical_analysis import TechnicalAnalysis  # Assuming TechnicalAnalysis is defined in this module
-from Apex.src.Core.strategies.mean_reversion import MeanReversionStrategy
-from Apex.src.Core.strategies.trend.momentum_breakout import MomentumBreakoutStrategy
-from Apex.src.Core.strategies.trend.trend_following import TrendFollowingStrategy
-from Apex.src.Core.strategies.regime_detection import RegimeDetectionStrategy
+from Apex.src.Core.trading.strategies.mean_reversion import MeanReversionStrategy
+from Apex.src.Core.trading.strategies.trend.momentum_breakout import MomentumBreakoutStrategy
+from Apex.src.Core.trading.strategies.trend.trend_following import TrendFollowingStrategy
+from Apex.src.Core.trading.strategies.regime_detection import RegimeDetectionStrategy
 import logging
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,9 @@ class MADDPG:
         # ✅ Load pre-trained MADDPG model
         self.load_model()
 
+        # Schedule daily retraining
+        schedule.every().day.at("00:00").do(self.retrain_maddpg)
+
     def load_model(self):
         """Loads a pre-trained MADDPG model."""
         try:
@@ -130,6 +134,10 @@ class MADDPG:
             logger.info("✅ Loaded trained MADDPG models.")
         except Exception as e:
             logger.warning(f"🚀 Model loading issue: {e}")
+
+    def retrain_maddpg(self):
+        logger.info("🔄 Retraining MADDPG Model with Latest Market Data...")
+        self.update(self.memory, batch_size=64)
 
     def remember(self, state, action, reward, next_state, done):
         """Stores experiences for training."""
@@ -291,8 +299,14 @@ def compute_reward(self, predicted_price, true_price, action):
     sentiment = self.fundamental_analysis.fetch_news_sentiment()
     macro = self.fundamental_analysis.fetch_macro_factors()
     
+    # Determine sentiment weight based on volatility
+    if indicators["atr"] > 1.5 * np.mean(indicators["atr"]):
+        sentiment_weight = 0.3  # Increase sentiment impact
+    else:
+        sentiment_weight = 0.1  # Keep it low during normal markets
+
     # Robust reward adjustment:
-    sentiment_factor = 1 + (sentiment * 0.1 if sentiment else 0)
+    sentiment_factor = 1 + (sentiment * sentiment_weight if sentiment else 0)
     inflation_factor = 1 - (macro.get("inflation", 0) * 0.05)
 
     reward *= sentiment_factor * inflation_factor
@@ -337,12 +351,17 @@ def select_action(self, market_data, true_price=None):
     strategy_decision = selected_strategy.compute_signal(market_data)
 
     # ✅ Adjust MADDPG action based on strategy output
-    if strategy_decision == "BUY":
-        adjusted_action = max(raw_action, 0)  # If MADDPG was neutral, move to BUY
-    elif strategy_decision == "SELL":
-        adjusted_action = min(raw_action, 0)  # If MADDPG was neutral, move to SELL
+    if strategy_decision == "BUY" and raw_action < 0:
+        adjusted_action = 0  # BLOCK SELL
+    elif strategy_decision == "SELL" and raw_action > 0:
+        adjusted_action = 0  # BLOCK BUY
     else:
-        adjusted_action = 0  # HOLD
+        if strategy_decision == "BUY":
+            adjusted_action = max(raw_action, 0)  # If MADDPG was neutral, move to BUY
+        elif strategy_decision == "SELL":
+            adjusted_action = min(raw_action, 0)  # If MADDPG was neutral, move to SELL
+        else:
+            adjusted_action = 0  # HOLD
 
     # ✅ Apply Filters to Prevent Weak Trades
     if indicators["rsi"] > 70 and indicators["aroon_down"] < 25:
@@ -353,10 +372,21 @@ def select_action(self, market_data, true_price=None):
     elif market_data["price"][-1] < indicators["bollinger_lower"]:
         adjusted_action = max(adjusted_action, 0)  # Buy if price is below Bollinger lower band
 
+    # ✅ Calculate ATR-based Stop Loss and Take Profit
+    atr = indicators["atr"]
+    stop_loss = market_data["price"][-1] - (atr * 2)  # Stop loss at 2x ATR
+    take_profit = market_data["price"][-1] + (atr * 3)  # Take profit at 3x ATR
+
+    # ✅ Exit conditions based on Stop Loss and Take Profit
+    if adjusted_action == "BUY" and market_data["price"][-1] > take_profit:
+        adjusted_action = 0  # EXIT trade if profit target hit
+    elif adjusted_action == "SELL" and market_data["price"][-1] < stop_loss:
+        adjusted_action = 0  # EXIT trade if stop-loss hit
+
     # ✅ Adjust action based on **sentiment & macro factors**
     sentiment = self.fundamental_analysis.fetch_news_sentiment()
     macro = self.fundamental_analysis.fetch_macro_factors()
-    adjusted_action *= (1 + sentiment * 0.1) * (1 - macro["inflation"] * 0.05)
+    adjusted_action *= (1 + sentiment * sentiment_weight) * (1 - macro["inflation"] * 0.05)
 
     final_action = np.clip(adjusted_action, -1, 1)
 
