@@ -100,6 +100,20 @@ class TradingModeConfig(BaseModel):
     live_trading: bool = False
     testnet: bool = True
 
+class StrategyEvaluationConfig(BaseModel):
+    trade_window: int = 100
+    performance_decay: float = 0.98
+    min_trades: int = 10
+    regime_weights: Dict[str, Dict[str, float]] = {
+        "trending": {
+            "TrendFollowingStrategy": 0.6,
+            "MomentumBreakout": 0.4
+        },
+        "mean_reverting": {
+            "MeanReversion": 0.8
+        }
+    }
+
 class RetailConfig(BaseModel):
     mode: str = "paper"
     execution: ExecutionConfig = ExecutionConfig()
@@ -112,6 +126,7 @@ class RetailConfig(BaseModel):
     notifications: NotificationConfig = NotificationConfig()
     strategies: StrategyConfig = StrategyConfig()
     trading_mode: TradingModeConfig = TradingModeConfig()
+    strategy_evaluation: StrategyEvaluationConfig = StrategyEvaluationConfig()  # Added strategy evaluation config
 
     class Config:
         extra = "ignore"  # Ignores unknown fields instead of crashing
