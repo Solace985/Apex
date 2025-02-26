@@ -21,34 +21,55 @@ from pydantic import BaseModel
 import aiosqlite
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
-from Retail.AI_Models.Reinforcement.maddpg_model import MADDPG
+from src.ai.reinforcement.maddpg_model import MADDPG
 import numpy as np
 from logger import setup_logger
-from data_feed import DataFeed as UtilsDataFeed
-from strategy_manager import StrategyManager
-from Retail.utils.risk_manager import RiskManager as UtilsRiskManager
-from Retail.AI_Models.machine_learning import MachineLearningModel
+from src.Core.data.realtime.data_feed import DataFeed as UtilsDataFeed
+from src.Core.trading.strategy_manager import StrategyManager
+from src.Core.trading.risk.risk_management import RiskManager as UtilsRiskManager
+from src.ai.forecasting.machine_learning import MachineLearningModel
 from joblib import Parallel, delayed
-from Retail.Core.Python.liquidity_manager import LiquidityManager
+from src.Core.trading.hft.liquidity_manager import LiquidityManager
 import requests
 from textblob import TextBlob
 from Apex.src.ai.analysis.fundamental_analysis import FundamentalAnalysis
 from Apex.src.ai.forecasting.sentiment_analysis import SentimentAnalyzer
-from Retail.Core.Python.liquidity_manager import LiquidityManager as AIModulesLiquidityManager
+from src.Core.trading.hft.liquidity_manager import LiquidityManager as AIModulesLiquidityManager
 from Apex.src.ai.forecasting.technical_analysis import TechnicalAnalysis
-from Retail.AI_Models.Reinforcement.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
-from Retail.Core.Python.risk_management import AdaptiveRiskManagement
+from Apex.src.ai.reinforcement.maddpg_model import MADDPG  # ✅ Added MADDPG for hierarchical indicator weighting
+from Apex.src.Core.trading.risk.risk_management import AdaptiveRiskManagement
 import time
-from Retail.Data.data_feed import DataFeed
-from Retail.Core.Python.trading_ai import TradingAI
-from Retail.Core.Python.risk_management import RiskManager
-from Retail.Core.Rust.execution_engine import ExecutionEngine
-from Retail.Metrics.performance_metrics import PerformanceTracker
-from Retail.Brokers.broker_factory import BrokerFactory
-from Retail.Strategies.trend_following import TrendFollowingStrategy
-from Retail.Strategies.mean_reversion import MeanReversionStrategy
+from Apex.src.Core.data.realtime.data_feed import DataFeed
+from Apex.src.Core.trading.ai.trading_ai import TradingAI
+from Apex.src.Core.trading.risk.risk_management import RiskManager
+from lib.src.execution_engine import ExecutionEngine
+from metrics.performance_metrics import PerformanceTracker
+from Apex.src.Core.trading.execution.broker_factory import BrokerFactory
+from Apex.src.Core.trading.strategies.trend.trend_following import TrendFollowingStrategy
+from Apex.src.Core.trading.strategies.mean_reversion import MeanReversionStrategy
 from concurrent.futures import ProcessPoolExecutor
+import jsonschema
 
+class MarketDataBus:
+    """
+    Central data bus for sharing market updates across components (sentiment, risk, execution).
+    """
+    def __init__(self):
+        self._data = {}
+        self._lock = threading.Lock()
+
+    def update(self, key, value):
+        """Thread-safe update of market data."""
+        with self._lock:
+            self._data[key] = value
+
+    def get(self, key, default=None):
+        """Thread-safe retrieval of market data."""
+        with self._lock:
+            return self._data.get(key, default)
+
+# Global instance to be used across modules
+market_data_bus = MarketDataBus()
 
 # This file is the core of the bot that is responsible for handling the strategy and execution of the trades.
 

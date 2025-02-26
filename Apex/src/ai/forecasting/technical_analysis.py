@@ -205,15 +205,22 @@ class TechnicalAnalysis:
         confidence_score = performance_with.sharpe_ratio - performance_without.sharpe_ratio
         return max(0, confidence_score)  # Confidence must be non-negative
 
-    def indicator_confidence_weights(self, historical_data, rolling_window=50):
+    def indicator_confidence_weights(self, historical_data, rolling_window=50, recent_weight=0.7, past_weight=0.3):
         """
         Dynamically assigns confidence weights to each indicator based on past performance.
         Uses a rolling window to continuously update confidence.
+        More weight is given to recent performance to ensure adaptability.
         """
         confidence_scores = {}
         for indicator_name, indicator_func in self.indicators.items():
-            recent_data = historical_data.tail(rolling_window)  # Only consider recent data
-            confidence_scores[indicator_name] = self.evaluate_indicator_performance("crypto", indicator_func, recent_data)
+            recent_data = historical_data.tail(int(rolling_window * recent_weight))
+            past_data = historical_data.tail(int(rolling_window * past_weight))
+
+            recent_score = self.evaluate_indicator_performance("crypto", indicator_func, recent_data)
+            past_score = self.evaluate_indicator_performance("crypto", indicator_func, past_data)
+
+            # Weighted confidence score: 70% recent performance, 30% past performance
+            confidence_scores[indicator_name] = (recent_weight * recent_score) + (past_weight * past_score)
 
         # Normalize confidence scores
         total_confidence = sum(confidence_scores.values()) + 1e-10  # Avoid division by zero
@@ -267,8 +274,11 @@ class TechnicalAnalysis:
         if contradiction_score > 1.5:
             selected_indicators = {key: value * 0.5 for key, value in selected_indicators.items()}
 
-        # If contradiction is extreme, avoid making a trade
-        if contradiction_score > 2.5:
+        # Compute total confidence of selected indicators
+        total_trade_confidence = sum(selected_indicators.values())
+
+        # If contradiction is extreme, or total confidence is too low, avoid making a trade
+        if contradiction_score > 2.5 or total_trade_confidence < 0.3:
             return {}  # No trade signal
 
         return selected_indicators

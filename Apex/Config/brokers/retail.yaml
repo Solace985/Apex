@@ -88,3 +88,15 @@ fundamental_sources:
   Crypto: ["OnChainAnalysis", "MarketSentiment"]
   Commodities: ["OilProductionData", "WeatherReports"]
   Indices: ["BondYields", "CPIReports"]
+
+# 🔹 Sentiment Analysis Configuration
+sentiment:
+  window_size: 15
+  weights:
+    news: 0.6
+    social: 0.4
+  news_sources: ["newsapi", "finnhub"]
+  api_keys:
+    newsapi: ${NEWSAPI_KEY}
+    finnhub: ${FINNHUB_KEY}
+  hf_token: ${HF_TOKEN}
