@@ -1,14 +1,14 @@
 import logging
 import asyncio
 from datetime import datetime
-from typing import Dict, Optional
-import logging
+from typing import Dict, Optional, List
 from functools import wraps
 import time
-from Retail.Brokers.broker_factory import BrokerFactory
-from Retail.Core.Python.exceptions import RetryableError, FatalExecutionError
-from Retail.Core.Python.schemas import OrderSchema, ExecutionResult
-from Retail.Core.Python.security import sanitize_order_details
+import logging
+from Core.trading.execution.broker_factory import BrokerFactory
+from Core.trading.ai.exceptions import RetryableError, FatalExecutionError
+from Core.trading.ai.schemas import OrderSchema, ExecutionResult
+from Core.trading.security.security import sanitize_order_details
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import BaseModel, Field, condecimal
 
@@ -184,6 +184,11 @@ class OrderExecution:
                 success='status' in locals() and status == "SUCCESS",
                 latency=time.time() - start_time
             )
+
+    async def execute_batch_orders(self, orders: List[Dict]):
+        """Existing order execution implementation"""
+        for order in orders:
+            await self.execute_trade_async(order)
 
     def execute_trade(self, order_details: Dict) -> ExecutionResult:
         """Synchronous entry point with async execution"""

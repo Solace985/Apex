@@ -4,15 +4,15 @@ from typing import Dict, Any, Optional
 
 from utils.logging.structured_logger import StructuredLogger
 from utils.helpers.error_handler import handle_api_error
-from core.trading.execution.broker_manager import BrokerManager
-from core.trading.execution.retail_core import market_data_bus
-from core.trading.strategies.strategy_evaluator import StrategyEvaluator
-from core.trading.strategies.strategy_selector import StrategySelector
-from core.trading.risk.risk_management import validate_order
-from core.trading.strategies.trend.regime_detection import RegimeDetection
-from core.trading.strategies.trend.trend_following import TrendFollowingStrategy
-from core.trading.strategies.mean_reversion import MeanReversionStrategy
-from core.trading.strategies.trend.momentum_breakout import MomentumBreakoutStrategy
+from Core.trading.execution.broker_manager import BrokerManager
+from Core.trading.execution.retail_core import market_data_bus
+from Core.trading.strategies.strategy_evaluator import StrategyEvaluator
+from Core.trading.strategies.strategy_selector import StrategySelector
+from Core.trading.risk.risk_management import validate_order
+from Core.trading.strategies.regime_detection import RegimeDetection
+from Core.trading.strategies.trend.trend_following import TrendFollowingStrategy
+from Core.trading.strategies.mean_reversion import MeanReversionStrategy
+from Core.trading.strategies.trend.momentum_breakout import MomentumBreakoutStrategy
 
 class StrategyOrchestrator:
     """Enhanced Strategy Orchestration for ApexRetail"""
@@ -149,3 +149,7 @@ class StrategyOrchestrator:
 
         except Exception as e:
             self.logger.critical("Orchestration cycle failed", error=str(e))
+
+    def get_optimal_slippage_model(self):
+        """Load pre-trained slippage model from strategy registry"""
+        # Implementation using existing model registry

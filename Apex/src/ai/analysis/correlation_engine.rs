@@ -5,7 +5,7 @@ use chrono::{Duration, Utc};
 use lru::LruCache;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::market_data::{fetch_fundamental_data, fetch_historical_data, fetch_volatility};
+use crate::market_data::{fetch_fundamental_data, fetch_historical_data, fetch_volatility, get_volatility};
 use crate::stats::{calculate_dtw_correlation};
 use crate::ai_models::predict_correlation;
 use crate::graph_db::store_correlation;
@@ -194,5 +194,13 @@ impl CorrelationEngine {
             _ => 7200,                   // 2 hours default
         };
         base + (conf * 3600.0) as i64
+    }
+
+    pub fn optimize_execution_timing(symbol: &str) -> f64 {
+        // Use existing correlation_monitor data
+        let patterns = correlation_monitor::get_weekly_patterns(symbol);
+        let volatility = market_data::get_volatility(symbol);
+        // Calculate optimal entry time (existing functionality extended)
+        patterns.optimal_entry * volatility.adjustment_factor
     }
 }

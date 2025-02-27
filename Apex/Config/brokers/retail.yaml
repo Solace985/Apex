@@ -40,6 +40,38 @@ database:
 # 🔹 Logging & Debugging Settings
 logging:
   level: "INFO"  
+
+# 🔹 Conflict Resolution Configuration
+conflict_resolution:
+  # Weight management
+  bias_threshold: 1.5
+  bias_correction_factor: 1.3
+  max_confidence_ratio: 1.8
+  
+  # Drift detection
+  drift_threshold: 0.15
+  max_drift_models: 2
+  
+  # RL integration
+  rl_confidence_threshold: 0.78
+  rl_min_samples: 50
+  
+  # Regime weights
+  regime_weights:
+    trending:
+      technical: 0.6
+      fundamental: 0.2
+      sentiment: 0.2
+    volatile:
+      rl: 0.5
+      correlation: 0.3
+      technical: 0.2
+  default_weights:
+    technical: 0.3
+    fundamental: 0.25
+    sentiment: 0.2
+    rl: 0.15
+    correlation: 0.1
   log_to_file: true
   log_file_path: "logs/bot_activity.log"
 
@@ -100,3 +132,78 @@ sentiment:
     newsapi: ${NEWSAPI_KEY}
     finnhub: ${FINNHUB_KEY}
   hf_token: ${HF_TOKEN}
+
+# 🔹 Meta Trading Configuration
+meta_trading:
+  base_weights:
+    trending:
+      technical: 0.6
+      fundamental: 0.2
+      sentiment: 0.1
+      rl: 0.0
+      correlation: 0.1
+    volatile:
+      technical: 0.3
+      fundamental: 0.1
+      sentiment: 0.2
+      rl: 0.4
+      correlation: 0.0
+  volatility_threshold: 0.35
+
+# 🔹 Ensemble Voting Configuration
+ensemble_voting:
+  training_window: 252  # 1 year of trading days
+  retraining_interval: 7  # days
+  volatility_thresholds:
+    low: 0.2
+    medium: 0.4
+    high: 0.6
+  asset_weights:
+    stocks:
+      fundamental: 0.4
+      technical: 0.3
+    forex:
+      technical: 0.6
+      sentiment: 0.2
+    crypto:
+      sentiment: 0.5
+      correlation: 0.3
+
+# 🔹 Transformer LSTM Configuration
+transformer_lstm:
+  input_size: 128
+  lstm_hidden: 64
+  lstm_layers: 2
+  n_heads: 8
+  ff_dim: 256
+  transformer_layers: 3
+  output_size: 64
+  short_term_dim: 32
+  max_variance: 0.25
+  retrain_threshold: 1000
+  regime_types: ['trending', 'volatile', 'mean_reverting', 'neutral']
+  model_weights: '/models/transformer_lstm.pt'
+
+# 🔹 Conflict Resolution Configuration
+conflict_resolution:
+  bias_threshold: 0.4
+  drift_threshold: 0.15
+  max_drift_models: 2
+  default_weights:
+    technical: 0.3
+    fundamental: 0.25
+    sentiment: 0.2
+    rl: 0.15
+    correlation: 0.1
+  regime_weights:
+    trending:
+      technical: 0.5
+      fundamental: 0.2
+      sentiment: 0.3
+    volatile:
+      rl: 0.4
+      technical: 0.3
+      correlation: 0.3
+    mean_reverting:
+      fundamental: 0.4
+      technical: 0.4

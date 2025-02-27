@@ -8,6 +8,7 @@ use crate::market_data::{fetch_historical_data, fetch_volatility, fetch_liquidit
 use crate::stats::{calculate_rolling_corr, detect_anomaly, detect_volatility_clusters};
 use crate::graph_db::store_correlation; // ✅ Store in Graph DB
 use log::{warn, error, info};
+use rust_decimal::Decimal; // Import Decimal for asset clusters
 
 fn generate_asset_pairs(assets: &[String]) -> Vec<(String, String)> {
     let mut pairs = Vec::with_capacity(assets.len() * (assets.len() - 1) / 2);
@@ -27,6 +28,12 @@ fn should_compare(a1: &str, a2: &str) -> bool {
     // Implement asset class filtering
     !(is_crypto(a1) && is_forex(a2)) &&
     correlation_coverage(a1, a2) > 0.8
+}
+
+pub fn get_asset_clusters(symbol: &str) -> HashMap<String, Decimal> {
+    // Quantum clustering implementation
+    // Placeholder for actual implementation
+    HashMap::new()
 }
 
 pub async fn update_correlations(&self) {

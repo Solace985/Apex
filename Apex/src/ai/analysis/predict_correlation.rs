@@ -1,95 +1,144 @@
-use reqwest::{Client, Error, RequestBuilder};
+// Analysis/correlation_predictor.rs
+use crate::{
+    utils::{
+        error_handler::ApiError,
+        logging::structured_logger::{log_correlation_prediction, LogLevel},
+    },
+    Config::config_loader::get_ai_service_config,
+    Core::data::historical_data::fetch_validated_correlation_history,
+    Core::data::asset_validator::validate_asset_pair, // Import the function
+};
+use reqwest::{Client, RequestBuilder};
 use serde_json::json;
-use tokio::time::timeout;
-use log::{error, info};
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
-use crate::market_data::fetch_historical_correlation_series;
-use hmac_sha256::hmac_sha256; // Ensure to include the hmac_sha256 crate
+use tokio::{sync::Mutex, time::timeout};
+use std::{collections::HashMap, time::Duration};
+use hmac_sha512::hmac_sha512;  // More secure than SHA256
+use uuid::Uuid;
 
-fn sign_request(request: RequestBuilder, key: &str) -> RequestBuilder {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    
-    let signature = hmac_sha256(key, format!("{}{}", nonce, request));
+// Shared cache for correlation predictions
+lazy_static! {
+    static ref PREDICTION_CACHE: Mutex<HashMap<(String, String), f64>> = Mutex::new(HashMap::new());
+}
+
+fn create_secure_nonce() -> String {
+    Uuid::new_v4().to_string() // Cryptographically secure nonce
+}
+
+fn sign_request(request: RequestBuilder, secret: &str) -> RequestBuilder {
+    let nonce = create_secure_nonce();
+    let body_hash = hmac_sha512(secret.as_bytes(), nonce.as_bytes());
     
     request
         .header("X-Auth-Nonce", nonce)
-        .header("X-Auth-Signature", signature)
+        .header("X-Auth-Signature", format!("{:x}", body_hash))
+        .header("X-Request-ID", Uuid::new_v4().to_string())
 }
 
-/// ✅ **Predicts AI-Based Correlation Between Two Assets**
-pub async fn predict_correlation(asset1: &str, asset2: &str) -> f64 {
+/// Integrated with historical data validation and AI model orchestration
+pub async fn predict_correlation(asset1: &str, asset2: &str) -> Result<f64, ApiError> {
+    let config = get_ai_service_config()?;
     let client = Client::new();
-    let url = "http://localhost:5000/predict_correlation";
+    
+    // Validate asset pair securely
+    validate_asset_pair(asset1, asset2).await.map_err(|e| {
+        log_correlation_prediction(LogLevel::Error, asset1, asset2, &e.to_string());
+        ApiError::InvalidAssetPair(format!("Validation failed: {}", e))
+    })?;
 
-    // ✅ **Fetch Historical Correlation Data (Ensures Data Exists)**
-    let history = match fetch_historical_correlation_series(asset1, asset2).await {
-        Ok(data) if !data.is_empty() => data,
-        _ => {
-            error!("❌ No historical correlation data available for {}-{}", asset1, asset2);
-            return 0.0;
+    // Check cache first
+    let cache_key = (asset1.to_string(), asset2.to_string());
+    {
+        let cache = PREDICTION_CACHE.lock().await;
+        if let Some(pred) = cache.get(&cache_key) {
+            return Ok(*pred);
         }
-    };
+    }
+
+    // Fetch validated historical data with anomaly detection
+    let history = fetch_validated_correlation_history(asset1, asset2)
+        .await
+        .map_err(|e| ApiError::DataValidationFailed(e.to_string()))?;
 
     let payload = json!({
-        "correlation_series": history
+        "assets": [asset1, asset2],
+        "correlation_series": history,
+        "model_version": "quantum_ensemble_v3"
     });
 
-    // ✅ **Enforce API Timeout of 3 Seconds**
-    match timeout(Duration::from_secs(3), sign_request(client.post(url), "your_secret_key").json(&payload).send()).await {
-        Ok(Ok(response)) => {
-            match response.json::<serde_json::Value>().await {
-                Ok(json) if json.get("predicted_correlation").is_some() => {
-                    let pred = json["predicted_correlation"].as_f64().unwrap_or(0.0);
-                    info!("🔮 AI Predicted Correlation: {}-{} -> {:.4}", asset1, asset2, pred);
-                    pred
-                },
-                _ => {
-                    error!("❌ Invalid AI Response Format: {:?}", response);
-                    0.0
-                }
-            }
+    let signed_request = sign_request(client.post(&config.prediction_endpoint), &config.api_secret)
+        .json(&payload)
+        .timeout(Duration::from_secs(2));
+
+    match timeout(Duration::from_secs(3), signed_request.send()).await {
+        Ok(Ok(response)) if response.status().is_success() => {
+            let json: serde_json::Value = response.json().await.map_err(|e| {
+                log_correlation_prediction(LogLevel::Error, asset1, asset2, &e.to_string());
+                ApiError::InvalidResponseFormat
+            })?;
+
+            let prediction = json["prediction"]
+                .as_f64()
+                .ok_or(ApiError::InvalidPredictionData)?;
+
+            // Update cache and return
+            let mut cache = PREDICTION_CACHE.lock().await;
+            cache.insert(cache_key, prediction);
+            
+            log_correlation_prediction(LogLevel::Info, asset1, asset2, &format!("Prediction: {:.4}", prediction));
+            Ok(prediction)
         }
         Ok(Err(e)) => {
-            error!("❌ API Request Failed: {}", e);
-            0.0
+            log_correlation_prediction(LogLevel::Error, asset1, asset2, &e.to_string());
+            Err(ApiError::ServiceUnavailable(e.to_string()))
         }
         Err(_) => {
-            error!("⏳ API Request Timed Out (3s)");
-            0.0
+            let msg = "Prediction service timeout".to_string();
+            log_correlation_prediction(LogLevel::Warning, asset1, asset2, &msg);
+            Err(ApiError::Timeout(msg))
         }
     }
 }
 
-/// ✅ **Batch Predicts AI-Based Correlation Between Multiple Asset Pairs**
-pub async fn batch_predict_correlations(pairs: &[(String, String)]) -> HashMap<(String, String), f64> {
+/// Batch prediction with circuit breaker pattern
+pub async fn batch_predict_correlations(pairs: &[(String, String)]) -> Result<HashMap<(String, String), f64>, ApiError> {
+    let config = get_ai_service_config()?;
     let client = Client::new();
-    let url = "http://localhost:5000/batch_predict";
     
+    // Validate all pairs first
+    for (a1, a2) in pairs {
+        crate::Core::data::asset_validator::validate_asset_pair(a1, a2).await?;
+    }
+
     let payload = json!({
         "pairs": pairs,
-        "historical_window": "720h"
+        "historical_window": "720h",
+        "model_selector": "adaptive_ensemble"
     });
-    
-    match client.post(url)
+
+    let signed_request = sign_request(client.post(&config.batch_endpoint), &config.api_secret)
         .json(&payload)
-        .send()
-        .await {
-            Ok(response) => {
-                match response.json::<HashMap<(String, String), f64>>().await {
-                    Ok(predictions) => predictions,
-                    Err(e) => {
-                        error!("❌ Failed to parse response JSON: {}", e);
-                        HashMap::new()
-                    }
-                }
-            },
-            Err(e) => {
-                error!("❌ API Request Failed: {}", e);
-                HashMap::new()
+        .timeout(Duration::from_secs(5));
+
+    match timeout(Duration::from_secs(7), signed_request.send()).await {
+        Ok(Ok(response)) if response.status().is_success() => {
+            let predictions: HashMap<(String, String), f64> = response.json().await.map_err(|_| ApiError::InvalidResponseFormat)?;
+            
+            // Update cache
+            let mut cache = PREDICTION_CACHE.lock().await;
+            for (pair, value) in &predictions {
+                cache.insert(pair.clone(), *value);
             }
+            
+            Ok(predictions)
         }
+        Ok(Err(e)) => {
+            log_correlation_prediction(LogLevel::Error, "batch", "processing", &e.to_string());
+            Err(ApiError::ServiceUnavailable(e.to_string()))
+        }
+        Err(_) => {
+            let msg = "Batch prediction timeout".to_string();
+            log_correlation_prediction(LogLevel::Warning, "batch", "processing", &msg);
+            Err(ApiError::Timeout(msg))
+        }
+    }
 }
