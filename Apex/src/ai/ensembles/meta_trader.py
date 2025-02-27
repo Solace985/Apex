@@ -3,14 +3,13 @@ import logging
 from typing import Dict, Any, Optional
 from utils.logging.structured_logger import StructuredLogger
 from utils.helpers.error_handler import handle_api_error
-from core.trading.strategies.regime_detection import RegimeDetector
+from Core.trading.strategies.regime_detection import RegimeDetector
 from ai.ensembles.ensemble_voting import EnsembleVoter
-from core.trading.execution.conflict_resolver import ConflictResolver
-from core.data.correlation_optimizer import CorrelationOptimizer
+from Core.trading.execution.conflict_resolver import ConflictResolver
+from Core.data.correlation_optimizer import CorrelationOptimizer
 
 class MetaTrader:
     """Central decision-making layer for AI-driven trade execution"""
-    
     def __init__(self, market_data_bus: Any):
         self.logger = StructuredLogger(__name__)
         self.market_data_bus = market_data_bus
@@ -138,9 +137,10 @@ class MetaTrader:
             # Optimize correlation timing
             optimized_decision = self.correlation_optimizer.optimize(
                 self._calculate_final_signal(resolved_signals, weights)
-                
+            )
+            
             # Apply risk management
-            from core.trading.risk.risk_management import validate_decision
+            from Core.trading.risk.risk_management import validate_decision
             if validate_decision(optimized_decision):
                 return optimized_decision
                 
@@ -158,7 +158,7 @@ class MetaTrader:
             
         decision = self.generate_decision()
         if decision and decision['action'] != 'hold':
-            from core.trading.execution.order_execution import execute_order
+            from Core.trading.execution.order_execution import execute_order
             execute_order(decision)
             
         return decision
