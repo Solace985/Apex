@@ -1,137 +1,192 @@
+"""
+Institutional-Grade Backtesting Engine - Core Component
+Integrates with: market_data.py, meta_trader.py, risk_management.py, decision_logger.py
+"""
+
 import numpy as np
 import pandas as pd
-import os
-import importlib
-import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple
+from pathlib import Path
 
-# Ensure Data Directory Exists
-if not os.path.exists("Data"):
-    os.makedirs("Data")
-
-# ✅ Load Market Data & Convert Timestamp
-df = pd.read_csv("Retail/Data/market_data.csv")
-
-if 'timestamp' in df.columns and df['timestamp'].dtype != 'datetime64[ns]':
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-
-df.to_csv("Retail/Data/market_data_converted.csv", index=False)
-print("✅ Data converted and saved!")
-
+# Integrated with existing project modules
+from src.Core.data.market_data import MarketDataAPI
+from src.Core.trading.ai.meta_trader import MetaTrader
+from src.Core.trading.logging.decision_logger import DecisionLogger
+from src.Core.trading.risk.risk_management import RiskEngine
+from src.Metrics.performance_metrics import SharpeRatio, MaxDrawdownCalculator
 
 class BacktestOrchestrator:
     def __init__(self):
-        self.simulator = BacktestingEngine(None, None)  # Placeholder for strategy and data
-        self.evaluator = PerformanceEvaluator()
+        self.data_loader = MarketDataAPI()
+        self.simulator = BacktestEngine()
+        self.risk_engine = RiskEngine()
+        self.logger = DecisionLogger()
+        self.performance = BacktestMetrics()
 
-    def run(self, strategies, ai_models, data_path):
-        print(f"\n📊 Loading historical data from {data_path}")
-        df = pd.read_csv(data_path, parse_dates=['timestamp'])
-
-        # ✅ Apply AI predictions before backtest (if AI models exist)
-        if ai_models:
-            for ai_model in ai_models:
-                df = ai_model.apply_predictions(df)
-
-        # ✅ Initialize backtest with multiple strategies
-        self.simulator = BacktestingEngine(strategies, df)
-        results = self.simulator.run_backtest()
+    def run_full_backtest(
+        self,
+        symbols: List[str],
+        start: datetime,
+        end: datetime,
+        timeframe: str = '1D'
+    ) -> Dict:
+        """Main entry point for institutional-grade backtesting"""
+        results = {}
         
-        # ✅ Evaluate performance
-        return self.evaluator.calculate_metrics(results)
+        for symbol in symbols:
+            # Integrated with market_data.py
+            hist_data = self.data_loader.get_historical_data(
+                symbol, start, end, timeframe
+            )
+            
+            # Walk-forward optimization
+            for train_data, test_data in self._walk_forward_split(hist_data):
+                # Simulate AI model retraining
+                self._retrain_ai_models(train_data)
+                
+                # Execute backtest
+                trades = self.simulator.run(test_data)
+                
+                # Analyze results
+                results[symbol] = self.performance.calculate(trades)
+                
+                # Integrated with decision_logger.py
+                self._log_backtest_results(trades, symbol)
+        
+        return self._generate_final_report(results)
+
+    def _walk_forward_split(self, data: pd.DataFrame, 
+                          train_ratio: float = 0.7,
+                          window: int = 30) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Walk-forward optimization using existing data"""
+        train_size = int(len(data) * train_ratio)
+        for i in range(train_size, len(data), window):
+            yield data.iloc[:i], data.iloc[i:i+window]
+
+    def _retrain_ai_models(self, train_data: pd.DataFrame):
+        """Integrated with reinforcement_learning.py"""
+        from src.ai.reinforcement.learning import update_models
+        update_models(train_data)
+
+    def _log_backtest_results(self, trades: List[Dict], symbol: str):
+        """Integrated with decision_logger.py"""
+        for trade in trades:
+            self.logger.log_decision({
+                'symbol': symbol,
+                'timestamp': trade['entry_time'],
+                'action': trade['action'],
+                'size': trade['size'],
+                'model_weights': trade['model_weights'],
+                'risk_params': trade['risk_params']
+            })
+
+    def _generate_final_report(self, results: Dict) -> Dict:
+        """Integrated with report_generator.py"""
+        from report_generator import create_performance_report
+        return create_performance_report(results)
 
 
-class BacktestingEngine:
-    def __init__(self, strategies, historical_data):
-        self.strategies = strategies
-        self.data = historical_data
-        self.orders = []  # Track simulated trades
+class BacktestEngine:
+    def __init__(self):
+        self.meta_trader = MetaTrader(simulated=True)
+        self.current_positions = {}
 
-    def run_backtest(self):
-        results = []
-        for index, row in self.data.iterrows():
-            for strategy in self.strategies:
-                signal = strategy.generate_signal(row)
-                if signal:
-                    print(f"📈 Trade Signal at {row['timestamp']}: {signal} ({strategy.__class__.__name__})")
-                    self.orders.append({"timestamp": row["timestamp"], "signal": signal, "strategy": strategy.__class__.__name__})
-                    results.append(signal)
+    def run(self, data: pd.DataFrame) -> List[Dict]:
+        """Execute backtest using existing trading infrastructure"""
+        trades = []
+        
+        for idx, row in data.iterrows():
+            # Get AI decision from meta_trader.py
+            decision = self.meta_trader.generate_signal(row.to_dict())
+            
+            # Apply risk management from risk_management.py
+            if not self.risk_engine.approve_trade(decision):
+                continue
+                
+            # Execute simulated trade
+            trade_result = self.meta_trader.execute_trade(
+                symbol=decision['symbol'],
+                action=decision['action'],
+                size=decision['size'],
+                price=row['close']
+            )
+            
+            # Track performance
+            trades.append({
+                **trade_result,
+                'model_weights': decision['model_weights'],
+                'risk_params': decision['risk_params']
+            })
+            
+            # Update positions
+            self._update_positions(trade_result)
+        
+        return trades
 
-        return results
-
-    def add_slippage(self, order):
-        """
-        Simulates real-world bid-ask spread slippage.
-        """
-        bid_ask_spread = self.data[order['symbol']]['ask'] - self.data[order['symbol']]['bid']
-        slippage = bid_ask_spread * (0.1 if order['side'] == 'BUY' else 0.15)
-        order['execution_price'] += slippage
-        return slippage
-
-    def add_latency(self, order):
-        """
-        Adds execution latency simulation.
-        """
-        latency = np.random.exponential(scale=0.05)  # 50ms average latency
-        order['execution_time'] = datetime.now() + pd.Timedelta(latency, 'ms')
-        return latency
+    def _update_positions(self, trade: Dict):
+        """Position management using existing execution engine"""
+        symbol = trade['symbol']
+        if trade['action'] == 'EXIT':
+            del self.current_positions[symbol]
+        else:
+            self.current_positions[symbol] = trade
 
 
-class PerformanceEvaluator:
-    def calculate_metrics(self, trade_signals):
-        print("\n📈 Evaluating backtest performance...")
-        total_trades = len(trade_signals)
+class BacktestMetrics:
+    def __init__(self):
+        self.metrics = {
+            'sharpe': SharpeRatio(),
+            'drawdown': MaxDrawdownCalculator(),
+            'win_rate': lambda x: np.mean(x)
+        }
 
-        # ✅ Calculate win rate, profit/loss, drawdown, etc.
-        win_rate = np.random.uniform(0.4, 0.8)  # Placeholder (real PnL calc should be done)
-        avg_trade_duration = np.random.uniform(10, 60)  # Placeholder
-
+    def calculate(self, trades: List[Dict]) -> Dict:
+        """Comprehensive performance analysis"""
+        returns = [t['pnl_pct'] for t in trades if t['pnl_pct'] is not None]
+        winning = [t for t in trades if t['pnl'] > 0]
+        
         return {
-            "Total Trades": total_trades,
-            "Win Rate (%)": round(win_rate * 100, 2),
-            "Avg Trade Duration (mins)": round(avg_trade_duration, 2)
+            'sharpe_ratio': self.metrics['sharpe'](returns),
+            'max_drawdown': self.metrics['drawdown'](returns),
+            'win_rate': self.metrics['win_rate'](len(winning)/len(trades)),
+            'profit_factor': sum(t['pnl'] for t in winning) / 
+                            abs(sum(t['pnl'] for t in trades if t['pnl'] < 0))
         }
 
 
-# ✅ Auto-load Strategies from `Strategies/`
-def load_strategies():
-    strategy_files = [f[:-3] for f in os.listdir("Strategies") if f.endswith(".py") and f != "__init__.py"]
-    strategies = []
-    
-    for strategy_file in strategy_files:
-        module = importlib.import_module(f"Strategies.{strategy_file}")
-        if hasattr(module, "Strategy"):
-            strategies.append(module.Strategy())
-    
-    return strategies
+# Security Validation
+class BacktestValidator:
+    @staticmethod
+    def validate_inputs(data: pd.DataFrame):
+        """Integrated with validation.rs"""
+        from utils.helpers.validation.rs import validate_ohlc
+        if not validate_ohlc(data):
+            raise ValueError("Invalid OHLC data structure")
+            
+    @staticmethod
+    def sanitize_trade(trade: Dict) -> Dict:
+        """Prevent injection attacks"""
+        return {k: v for k, v in trade.items() if k in [
+            'symbol', 'action', 'size', 'price', 'timestamp'
+        ]}
 
 
-# ✅ Auto-load AI Models from `AI_Models/`
-def load_ai_models():
-    ai_model_files = [f[:-3] for f in os.listdir("AI_Models") if f.endswith(".py") and f != "__init__.py"]
-    ai_models = []
-    
-    for ai_model_file in ai_model_files:
-        module = importlib.import_module(f"AI_Models.{ai_model_file}")
-        if hasattr(module, "AIModel"):
-            ai_models.append(module.AIModel())
-    
-    return ai_models
-
-
-# ✅ Run Backtest
+# Integration Tests
 if __name__ == "__main__":
-    print("\n🚀 Starting Backtest...")
-
-    strategies = load_strategies()
-    ai_models = load_ai_models()
-
-    if not strategies:
-        print("❌ No strategies found in `Strategies/` folder. Exiting.")
-        exit(1)
-
+    # Initialize with existing config
+    from src.Config.config_loader import load_backtest_config
+    
+    config = load_backtest_config()
     orchestrator = BacktestOrchestrator()
-    results = orchestrator.run(strategies, ai_models, "Retail/Data/market_data_converted.csv")
-
-    print("\n✅ Backtest Complete!")
-    print(results)
+    
+    # Run full backtest using existing asset universe
+    results = orchestrator.run_full_backtest(
+        symbols=config['assets'],
+        start=datetime(2023, 1, 1),
+        end=datetime(2024, 1, 1),
+        timeframe=config['timeframe']
+    )
+    
+    print("\n=== Backtest Results ===")
+    print(json.dumps(results, indent=2))
