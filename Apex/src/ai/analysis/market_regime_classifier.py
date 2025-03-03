@@ -117,7 +117,7 @@ class QuantumRegimeClassifier:
     # Integration points
     def _get_sentiment_score(self) -> float:
         """Integrated sentiment analysis"""
-        from Apex.src.Core.trading.ai.sentiment_analysis import get_market_sentiment
+        from Apex.src.ai.forecasting.sentiment_analysis import get_market_sentiment
         return secure_float(get_market_sentiment(self.symbol))
 
     def _get_fundamental_metrics(self) -> list:

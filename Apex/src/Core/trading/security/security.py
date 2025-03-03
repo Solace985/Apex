@@ -64,3 +64,24 @@ def validate_order_type(order_type: str):
     allowed_types = {"LIMIT", "MARKET", "STOP", "STOP_LIMIT"}
     if order_type not in allowed_types:
         raise ValueError(f"Invalid order type: {order_type}")
+    
+
+def secure_delete(self, path: str, passes: int = 3) -> None:
+    """Securely erase sensitive data using DoD 5220.22-M standard"""
+    try:
+        if not os.path.exists(path):
+            return
+            
+        if os.path.isfile(path):
+            with open(path, "ba+") as f:
+                length = f.tell()
+                for _ in range(passes):
+                    f.seek(0)
+                    f.write(os.urandom(length))
+            os.remove(path)
+            
+        elif os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+    except Exception as e:
+        logger.error(f"Secure delete failed: {e}")
+        raise

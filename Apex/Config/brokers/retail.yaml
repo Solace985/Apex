@@ -207,3 +207,18 @@ conflict_resolution:
     mean_reverting:
       fundamental: 0.4
       technical: 0.4
+
+# 🔹 Report Format Configuration      
+formats:
+  default: html
+  available: [json, pdf, md, html, dashboard]
+
+# 🔹 Report Schedule Configuration
+schedule:
+  daily: "08:00"
+  weekly: "Monday 08:00"
+
+# 🔹 Email Configuration  
+email:
+  enabled: false
+  recipients: []
