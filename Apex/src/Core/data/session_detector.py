@@ -228,6 +228,39 @@ class SessionDetector:
         self.last_liquidity_update = datetime.utcnow()
         self.liquidity_update_cooldown = timedelta(seconds=60)  # Update liquidity forecast every minute
         
+        # Integration fixes: Add execution update rate limiting
+        self.last_execution_update = datetime.utcnow()
+        self.execution_update_cooldown = timedelta(seconds=2)  # Minimum 2 seconds between execution updates
+        self.execution_update_priority = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}  # Priority levels
+        self.pending_execution_updates = []
+        
+        # Integration fixes: Add market regime classification smoothing
+        self.regime_confidence = {}  # Store confidence levels for regime classifications
+        self.regime_confirmation_count = 0  # Count of consecutive confirmations for a regime change
+        self.required_regime_confirmations = 2  # Require 2 confirmations before changing regime
+        self.regime_ema_factor = 0.8  # EMA factor for smoothing regime transitions
+        self.regime_confidence_threshold = 0.7  # 70% confidence required for regime change
+        
+        # Integration fixes: Add risk update retry mechanism
+        self.risk_update_retries = {}  # Track retry attempts for risk updates
+        self.max_risk_retries = 3  # Maximum number of retry attempts
+        self.risk_retry_delay = 5  # Seconds between retry attempts
+        self.risk_update_confirmations = {}  # Track confirmations from risk manager
+        
+        # Integration fixes: Add model weight update filtering
+        self.last_model_weights = {}  # Store last applied model weights
+        self.model_weight_change_threshold = 0.05  # 5% threshold for weight updates
+        self.model_weight_update_lock = asyncio.Lock()  # Lock for weight updates during volatility
+        
+        # Integration fixes: Add economic event immediate risk adjustment
+        self.economic_event_risk_adjustments = {
+            "MAJOR": 0.5,  # 50% risk reduction for major events (Rate, CPI, NFP)
+            "MINOR": 0.8,  # 20% risk reduction for minor events (PMI, Retail)
+            "REGULAR": 0.9  # 10% risk reduction for regular events
+        }
+        self.economic_event_alert_window = 60  # Minutes before event to trigger alert
+        self.economic_event_immediate_window = 30  # Minutes before event for immediate adjustment
+        
     def _setup_session_detection_components(self) -> None:
         """Configure advanced session detection components"""
         # Sessions timing definitions (UTC) - for precise transitions
@@ -862,7 +895,7 @@ class SessionDetector:
         self.anomaly_flags = set()
 
     def _update_execution_strategy(self, session: str, intra_session: str, market_regime: str) -> None:
-        """Update execution strategy based on current session and market regime"""
+        """Dynamically adjust execution strategy based on session type, liquidity, volatility, and institutional flow."""
         # Get recommended strategies for the session
         recommended_strategies = self.session_execution_strategies.get(session, [])
         
@@ -893,6 +926,26 @@ class SessionDetector:
         else:
             # Use first recommended strategy as default
             self.current_execution_strategy = recommended_strategies[0]
+            
+        # New dynamic adjustment logic
+        if self.institutional_presence_level > 0.7:
+            self.current_execution_strategy = "ICEBERG"  # Stealth execution for institutional trading
+        elif self.liquidity_imbalance > 0.6:
+            self.current_execution_strategy = "PASSIVE_LIMIT"  # Reduce market impact during illiquid periods
+        elif market_regime in ["TRENDING_UP", "BREAKOUT"] and self.gamma_exposure > 500000:
+            self.current_execution_strategy = "AGGRESSIVE_MARKET"  # Enter aggressively if conditions are ideal
+        elif self.volatility_regime == "HIGH":
+            self.current_execution_strategy = "VWAP"  # Volatility is high, so execute with volume-based strategies
+        else:
+            self.current_execution_strategy = "PCOMP"  # Default to participation-based execution
+
+        self.logger.info("Updated execution strategy",
+                     strategy=self.current_execution_strategy,
+                     session=session,
+                     market_regime=market_regime,
+                     institutional_presence=self.institutional_presence_level,
+                     liquidity_imbalance=self.liquidity_imbalance,
+                     volatility_regime=self.volatility_regime)
 
     async def _adjust_model_weights_for_session(self, session: str, market_regime: str) -> None:
         """Dynamically adjust AI model weights based on session and market regime"""
