@@ -7,6 +7,48 @@ from Apex.utils.helpers import validate_inputs, secure_float
 from Apex.src.Core.data.realtime.market_data import MarketDataFeed
 from Apex.src.ai.ensembles.transformers_lstm import TimeSeriesTransformer
 from Apex.src.Core.trading.strategies.regime_detection import RegimeParameters
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.preprocessing import StandardScaler
+from Apex.src.Core.data.market_data import MarketDataService
+
+class TransformerRegimeForecaster(nn.Module):
+    """Transformer-based model for market regime forecasting"""
+    def __init__(self, input_dim, hidden_dim=128, num_layers=2, num_heads=4):
+        super().__init__()
+        self.transformer = nn.Transformer(d_model=hidden_dim, nhead=num_heads, num_layers=num_layers)
+        self.fc = nn.Linear(hidden_dim, 3)  # 3 market regimes: Trending, Mean-Reverting, Volatile
+        
+    def forward(self, x):
+        x = self.transformer(x, x)  # Encoder-only Transformer
+        x = self.fc(x[-1])  # Use the last time step output
+        return x
+
+class MarketRegimeClassifier:
+    """Classifies and forecasts market regimes using AI models."""
+    def __init__(self):
+        self.scaler = StandardScaler()
+        self.market_data = MarketDataService()
+        self.model = TransformerRegimeForecaster(input_dim=10)
+        self.model.load_state_dict(torch.load("apex_transformer_model.pth"))
+        self.model.eval()
+
+    def classify_regime(self, symbol: str):
+        """Predicts the current market regime using real-time market data."""
+        data = self.market_data.get_historical_data(symbol, lookback=50)
+        features = self.scaler.fit_transform(data)
+        tensor_input = torch.tensor(features, dtype=torch.float32).unsqueeze(1)  # Add batch dimension
+        output = self.model(tensor_input)
+        regime = torch.argmax(output, dim=1).item()
+        return ["Trending", "Mean-Reverting", "Volatile"][regime]
+
+# Ensure `regime_forecaster.py` is no longer required
+
+def get_market_regime(symbol):
+    classifier = MarketRegimeClassifier()
+    return classifier.classify_regime(symbol)
 
 class QuantumRegimeClassifier:
     """AI-powered market regime classification with 6-layer detection"""

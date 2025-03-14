@@ -5,6 +5,20 @@ import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Multiply, Permute, Reshape, Activation, RepeatVector
 from sklearn.preprocessing import MinMaxScaler
+import torch
+import torch.nn as nn
+
+class LSTMFlowPredictor(nn.Module):
+    """LSTM model for predicting trade flows."""
+    def __init__(self, input_dim, hidden_dim=64, num_layers=2):
+        super().__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, 1)  # Predicts future order flow
+
+    def forward(self, x):
+        _, (hn, _) = self.lstm(x)
+        return self.fc(hn[-1])
+
 
 class LSTMModel:
     def __init__(self, time_steps=60, features=1, model_path="Retail/Models/lstm_trained.h5"):

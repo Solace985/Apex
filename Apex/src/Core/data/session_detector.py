@@ -39,8 +39,8 @@ from Apex.src.Core.data.event_calendar import EconomicCalendar
 from Apex.src.Core.trading.execution.order_execution import OrderExecutionManager
 from Apex.src.Core.trading.risk.risk_management import RiskManager
 from Apex.src.ai.ensembles.ensemble_voting import EnsembleVotingSystem
-from Apex.src.Core.trading.position.position_sizer import PositionSizer
-from Apex.src.Core.trading.execution.execution_timing import ExecutionTimingOptimizer
+from Apex.src.Core.trading.risk.portfolio_manager import PositionSizer
+from Apex.src.Core.trading.execution.market_impact import ExecutionTimingOptimizer
 from Apex.src.ai.analysis.market_regime_classifier import update_regime_classification
 
 # Performance-optimized constants

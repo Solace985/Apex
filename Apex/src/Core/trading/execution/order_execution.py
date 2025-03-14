@@ -11,7 +11,24 @@ from Core.trading.ai.schemas import OrderSchema, ExecutionResult
 from Core.trading.security.security import sanitize_order_details
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import BaseModel, Field, condecimal
+from Apex.src.Core.trading.execution.algo_engine import AlgorithmicExecutor
 
+class OrderExecution:
+    """Handles order execution, including algorithmic strategies."""
+    def __init__(self):
+        self.algo_executor = AlgorithmicExecutor()
+
+    def execute_order(self, order):
+        """Executes an order, using algorithmic execution if applicable."""
+        if order["strategy"] == "algorithmic":
+            return self.algo_executor.execute(order)
+        else:
+            return self.direct_execution(order)
+
+    def direct_execution(self, order):
+        """Executes order directly via brokers."""
+        # Standard execution logic here
+        pass
 logger = logging.getLogger(__name__)
 
 # Circuit breaker configuration

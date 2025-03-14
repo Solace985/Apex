@@ -1,4 +1,5 @@
 # src/Core/trading/execution/portfolio_manager.py
+# session_detector.py is importing position sizer from this file so implement accordingly.
 import numpy as np
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, List, Optional
@@ -9,6 +10,10 @@ from Apex.src.Core.trading.risk.risk_management import QuantumRiskManager
 from Apex.src.lib.correlation_updater import get_asset_clusters
 from Apex.src.Core.data.realtime.market_data import MarketDataFeed
 from Apex.src.Core.trading.strategies.regime_detection import MarketRegimeDetector
+
+def position_sizer(account_balance, risk_percentage, stop_loss):
+    """Determines optimal position size based on risk parameters."""
+    return (account_balance * risk_percentage) / stop_loss
 
 class PortfolioOrchestrator:
     """AI-Driven Portfolio Management System with 9-Layer Protection"""
